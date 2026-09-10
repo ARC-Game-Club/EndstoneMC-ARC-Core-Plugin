@@ -182,10 +182,10 @@ class ARCCorePlugin(Plugin):
         # 主菜单按钮注册表：button_id -> {text, on_click, priority, visible}
         self._main_menu_buttons: Dict[str, dict] = {}
         self._main_menu_buttons_lock = threading.Lock()
-        # 聊天/展示名前缀：prefix_name -> {priority}；玩家自定义文本 xuid -> {name -> text}
+        # 聊天/展示名前缀：prefix_name -> {priority}；玩家槽 xuid -> {name -> {text, visible}}
         self._chat_prefixes: Dict[str, dict] = {}
         self._chat_prefixes_lock = threading.Lock()
-        self._player_chat_prefixes: Dict[str, Dict[str, str]] = {}
+        self._player_chat_prefixes: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._player_chat_prefixes_lock = threading.Lock()
         try:
             self.economy.set_balance_changed_callback(
@@ -4588,29 +4588,8 @@ class ARCCorePlugin(Plugin):
         return True
 
     def _register_core_chat_prefixes(self) -> None:
-        """内置聊天前缀：公会 priority=2，头衔 priority=3。"""
-        self._put_chat_prefix(CHAT_PREFIX_GUILD, CHAT_PREFIX_PRIORITY_GUILD)
+        """内置聊天前缀：仅头衔 title=3；公会槽位由 arc_guild 注册（priority=2）。"""
         self._put_chat_prefix(CHAT_PREFIX_TITLE, CHAT_PREFIX_PRIORITY_TITLE)
-
-    def _compute_guild_chat_prefix(self, xuid: str) -> str:
-        """公会前缀展示文本；优先 arc_guild 插件，失败/缺失则无公会标签。"""
-        xs = str(xuid or "").strip()
-        no_guild_label = self.language_manager.GetText("GUILD_DISPLAY_NO_GUILD_SHORT")
-        if no_guild_label is None or not str(no_guild_label).strip():
-            no_guild_label = "[无公会]"
-        else:
-            no_guild_label = str(no_guild_label).strip()
-        plugin = self._guild_plugin()
-        if plugin is not None:
-            try:
-                fn = getattr(plugin, "build_guild_chat_prefix", None)
-                if callable(fn):
-                    text = str(fn(xs) or "")
-                    if text.strip():
-                        return text
-            except Exception:
-                pass
-        return f"§f{no_guild_label}§r"
 
     def _compute_title_chat_prefix(
         self, xuid: str, equipped_title: Optional[str]
@@ -4639,7 +4618,7 @@ class ARCCorePlugin(Plugin):
     ) -> str:
         """
         展示用：按已注册前缀 priority 升序拼接（越小越靠前），最后为游戏名。
-        内置 guild=2、title=3；其它插件注册的前缀取玩家已设置文本。
+        头衔为内置实时计算；公会等由插件经 api_register_chat_prefix / api_set_player_chat_prefix 写入。
         与聊天、头顶 name_tag、死亡播报及 get_player_name_by_xuid(..., True) 保持一致。
         """
         name = (raw_player_name or "").strip() or "?"
@@ -4647,15 +4626,13 @@ class ARCCorePlugin(Plugin):
         with self._chat_prefixes_lock:
             defs = [(n, dict(meta)) for n, meta in self._chat_prefixes.items()]
         with self._player_chat_prefixes_lock:
-            player_map = dict(self._player_chat_prefixes.get(xs, {})) if xs else {}
+            raw_map = dict(self._player_chat_prefixes.get(xs, {})) if xs else {}
         parts = []
         for pname, meta in defs:
-            if pname == CHAT_PREFIX_GUILD:
-                text = str(player_map.get(pname) or "") or self._compute_guild_chat_prefix(xs)
-            elif pname == CHAT_PREFIX_TITLE:
+            if pname == CHAT_PREFIX_TITLE:
                 text = self._compute_title_chat_prefix(xs, equipped_title)
             else:
-                text = str(player_map.get(pname) or "")
+                text = self._visible_prefix_text(raw_map.get(pname))
             if not text:
                 continue
             try:
@@ -4667,6 +4644,19 @@ class ARCCorePlugin(Plugin):
             parts.append((prio, pname, text))
         parts.sort(key=lambda item: (item[0], item[1]))
         return "".join(t[2] for t in parts) + name
+
+    @staticmethod
+    def _visible_prefix_text(entry: Any) -> str:
+        """玩家前缀槽 → 展示文本；兼容旧纯字符串；visible=False 时隐藏。"""
+        if entry is None:
+            return ""
+        if isinstance(entry, str):
+            return entry
+        if not isinstance(entry, dict):
+            return ""
+        if not entry.get("visible", True):
+            return ""
+        return str(entry.get("text") or "")
 
     def _refresh_player_name_tag_by_xuid(self, xuid: Optional[str]) -> None:
         if not xuid:
@@ -5289,8 +5279,8 @@ class ARCCorePlugin(Plugin):
     def api_register_chat_prefix(self, prefix_name: str, priority: int = 0) -> bool:
         """
         供其它插件注册聊天/展示名前缀槽位。
-        prefix_name：前缀名（如 \"vip\"）；priority 越小越靠前（最低 0）；同名覆盖。
-        内置：guild=2、title=3。注册后需再调 api_set_player_chat_prefix 写入玩家文本。
+        prefix_name：前缀名（如 \"guild\"、\"vip\"）；priority 越小越靠前（最低 0）；同名覆盖。
+        内置仅 title=3。注册后需再调 api_set_player_chat_prefix 写入玩家文本。
         """
         try:
             return self._put_chat_prefix(prefix_name, priority)
@@ -5308,16 +5298,19 @@ class ARCCorePlugin(Plugin):
         text: str,
         player_name: str = "",
         xuid: str = "",
+        visible: Optional[bool] = None,
     ) -> bool:
         """
-        设置玩家某已注册前缀的展示文本（含颜色码）。text 为空则清除。
-        player_name / xuid 填一个即可，xuid 优先。不可设置内置 guild / title（由核心实时计算）。
+        设置玩家某已注册前缀的展示文本（含颜色码）。
+        text 为空且未传 visible → 清除该槽；text 非空时默认 visible=True。
+        仅改显隐请用 visible=False/True（text 传 None 可保留原文）。
+        player_name / xuid 填一个即可，xuid 优先。内置 title 由核心实时计算，不可设置。
         成功后若玩家在线则刷新 name_tag。
         """
         pname = str(prefix_name or "").strip()
         if not pname:
             return False
-        if pname in (CHAT_PREFIX_GUILD, CHAT_PREFIX_TITLE):
+        if pname == CHAT_PREFIX_TITLE:
             return False
         with self._chat_prefixes_lock:
             if pname not in self._chat_prefixes:
@@ -5325,16 +5318,26 @@ class ARCCorePlugin(Plugin):
         resolved = self._api_resolve_player_xuid(player_name, xuid)
         if not resolved:
             return False
-        display = str(text or "")
         try:
             with self._player_chat_prefixes_lock:
                 slot = self._player_chat_prefixes.setdefault(resolved, {})
-                if not display:
+                prev = slot.get(pname)
+                prev_text = ""
+                if isinstance(prev, str):
+                    prev_text = prev
+                elif isinstance(prev, dict):
+                    prev_text = str(prev.get("text") or "")
+                if text is None:
+                    new_text = prev_text
+                else:
+                    new_text = str(text)
+                if not new_text and visible is None:
                     slot.pop(pname, None)
                     if not slot:
                         self._player_chat_prefixes.pop(resolved, None)
                 else:
-                    slot[pname] = display
+                    show = True if visible is None else bool(visible)
+                    slot[pname] = {"text": new_text, "visible": show}
             self._refresh_player_name_tag_by_xuid(resolved)
             return True
         except Exception as e:
@@ -5344,6 +5347,22 @@ class ARCCorePlugin(Plugin):
             except Exception:
                 pass
             return False
+
+    def api_set_player_chat_prefix_visible(
+        self,
+        prefix_name: str,
+        visible: bool,
+        player_name: str = "",
+        xuid: str = "",
+    ) -> bool:
+        """仅开关某前缀是否显示，保留已写入文本（如倒地显示/复活隐藏）。"""
+        return self.api_set_player_chat_prefix(
+            prefix_name,
+            None,
+            player_name=player_name,
+            xuid=xuid,
+            visible=bool(visible),
+        )
 
     def show_arc_tools_menu(self, player: Player):
         """我的信息、小喇叭、重生等快捷功能入口。"""

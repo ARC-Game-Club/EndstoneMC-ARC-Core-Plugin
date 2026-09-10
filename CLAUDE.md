@@ -104,7 +104,7 @@ Other EndStone plugins can call methods on the `ARCCorePlugin` instance via `ser
 - **Guilds**: 已拆出至独立插件 `arc_guild`（`EndstoneMC-ARC-Guild`）。其它插件请直接调用该插件 API；核心仅保留软依赖（领地/击杀/签到/前缀），查询失败一律视为无公会。
 - **Newbie**: `api_get_newbie_guide_text()`
 - **Main menu**: `api_register_main_menu_button(button_id, text, on_click, priority=6)`、`api_unregister_main_menu_button(button_id)` — 其它插件在 `on_enable` 注册主菜单入口；priority 越小越靠前（签到未签到=0、已签到=99；核心其它功能从 3 起）
-- **Chat prefixes**: `api_register_chat_prefix(prefix_name, priority=0)`、`api_set_player_chat_prefix(prefix_name, text, player_name="", xuid="")` — 聊天/头顶/`get_player_name_by_xuid(..., True)` 展示名前缀按 priority 升序拼接（越小越靠前，最低 0）；内置 `guild=2`、`title=3`；`text` 为空清除；不可设置内置 guild/title
+- **Chat prefixes**: `api_register_chat_prefix(prefix_name, priority=0)`、`api_set_player_chat_prefix(prefix_name, text, player_name="", xuid="", visible=None)`、`api_set_player_chat_prefix_visible(prefix_name, visible, player_name="", xuid="")` — 展示名前缀按 priority 升序拼接（越小越靠前，最低 0）。核心内置仅 `title=3`；`guild=2` 由 `arc_guild` 注册，文本为公会名。`text` 置空且未传 `visible` 则清除；`visible=False` 隐藏但保留原文（如倒地/复活）。`text` 传 `None` 可只改显隐。
 - **Cross-server plugin sync**: `api_sync_register_namespace(plugin_id, tables, on_apply)`、`api_sync_unregister_namespace(plugin_id)`、`api_sync_upsert(plugin_id, table, row)`、`api_sync_delete(plugin_id, table, where, params=None)`、`api_sync_list_namespaces()`、`api_sync_namespace_status(plugin_id)` — 第三方插件把自有表纳入跨服同步；业务数据仍在插件自己的 SQLite，下行经 `on_apply(namespace, table, op, data)` 写回。`op` 为 `full`/`upsert`/`delete`。
 
 All API methods are thread-safe.

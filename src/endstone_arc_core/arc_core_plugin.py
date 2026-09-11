@@ -13036,9 +13036,7 @@ class ARCCorePlugin(Plugin):
                                  on_click=self.show_invite_reward_config_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_TITLE_MANAGE_BUTTON'),
                                  on_click=self.show_op_title_manage_panel)
-        op_main_panel.add_button(self.language_manager.GetText('OP_GUILD_MANAGE_BUTTON'),
-                                 on_click=self.show_op_guild_manage_panel)
-        # 返回
+        # 公会管理已拆至 arc_guild（/arcguildop），核心 OP 面板不再入口
         op_main_panel.add_button(self.language_manager.GetText('RETURN_BUTTON_TEXT'),
                                   on_click=self.show_main_menu)
         player.send_form(op_main_panel)

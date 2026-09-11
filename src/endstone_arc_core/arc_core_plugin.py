@@ -5276,6 +5276,16 @@ class ARCCorePlugin(Plugin):
             },
         }
 
+    def _api_resolve_player_xuid(self, player_name: str = "", xuid: str = "") -> Optional[str]:
+        """API 入参归一：优先 xuid，否则按名字解析。"""
+        xuid_s = str(xuid or "").strip()
+        if xuid_s:
+            return xuid_s
+        name = str(player_name or "").strip()
+        if not name:
+            return None
+        return self.get_player_xuid_by_name(name)
+
     def api_register_chat_prefix(self, prefix_name: str, priority: int = 0) -> bool:
         """
         供其它插件注册聊天/展示名前缀槽位。

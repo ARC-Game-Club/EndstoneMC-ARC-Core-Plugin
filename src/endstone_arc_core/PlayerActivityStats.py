@@ -102,6 +102,8 @@ class PlayerActivityStats:
     def _migrate_legacy_activity_stats(self) -> bool:
         """将旧成就表中的 kill / break / place 键拷贝到本表。成功（含无旧表）返回 True。"""
         try:
+            if not self.database_manager.table_exists(self.LEGACY_TABLE):
+                return True
             legacy = self.database_manager.query_all(
                 f"SELECT xuid, stat_key, count FROM {self.LEGACY_TABLE}"
             )

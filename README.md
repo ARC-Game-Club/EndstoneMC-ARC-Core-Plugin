@@ -3,7 +3,7 @@
 # EndStone ARC Core Plugin / EndStone弧光核心
 
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/2f830615baf347258558dcc2a5ab85a1)](https://app.codacy.com/gh/DEVILENMO/EndstoneMC-ARC-Core-Plugin/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
-[![Version](https://img.shields.io/badge/version-v0.9.53-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)
+[![Version](https://img.shields.io/badge/version-v0.9.54-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![EndStone API](https://img.shields.io/badge/EndStone_API-0.7+-black)](https://github.com/EndstoneMC/endstone)
 [![License](https://img.shields.io/github/license/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)](LICENSE)
@@ -19,7 +19,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 
 - **作者**: DEVILENMO
 - **邮箱**: DEVILENMO@gmail.com
-- **版本**: 0.9.53
+- **版本**: 0.9.54
 - **API 版本**: 0.7+
 - **推荐 Python 版本**: 3.13
 
@@ -818,7 +818,11 @@ if arc and hasattr(arc, "api_register_chat_prefix"):
 
 ## 📋 近期更新日志
 
-### v0.9.53（当前版本）
+### v0.9.54（当前版本）
+
+- ✅ **简化 TPA 倒计时**：去掉 `run_two_player_task`；目标玩家 xuid/name 存进 `run_player_task` 闭包，到期再解析是否仍在线
+
+### v0.9.53
 
 - ✅ **紧急修复传送/进服**：补回拆公会时误删的 `run_player_task` / `run_two_player_task`（传送倒计时、进服延迟任务依赖）
 

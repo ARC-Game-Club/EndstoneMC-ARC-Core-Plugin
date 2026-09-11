@@ -7689,30 +7689,6 @@ class ARCCorePlugin(Plugin):
 
         return self.server.scheduler.run_task(self, _wrapped, delay=delay)
 
-    def run_two_player_task(
-        self,
-        player: Player,
-        target_player: Player,
-        fn: Callable[[Player, Player], None],
-        delay: int = 0,
-    ):
-        """调度需同时解析发起者与目标仍在线的回调。"""
-        xuid = str(getattr(player, "xuid", "") or "").strip()
-        name = str(getattr(player, "name", "") or "").strip()
-        target_xuid = str(getattr(target_player, "xuid", "") or "").strip()
-        target_name = str(getattr(target_player, "name", "") or "").strip()
-
-        def _wrapped() -> None:
-            p = self._resolve_online_player(xuid, name)
-            if p is None:
-                return
-            t = self._resolve_online_player(target_xuid, target_name)
-            if t is None:
-                return
-            fn(p, t)
-
-        return self.server.scheduler.run_task(self, _wrapped, delay=delay)
-
     def _resolve_online_player(self, xuid: str = "", name: str = "") -> Optional[Player]:
         """从 online_players 重取活对象；不触碰可能已销毁的旧 Player 引用。"""
         xuid_s = str(xuid or "").strip()
@@ -8617,14 +8593,22 @@ class ARCCorePlugin(Plugin):
     def start_teleport_to_player_countdown(self, player: Player, target_player: Player):
         """开始传送到玩家倒计时"""
         delay = 45
-        self.run_two_player_task(
-            player,
-            target_player,
-            self.execute_teleport_to_player,
-            delay=delay,
-        )
+        target_xuid = str(getattr(target_player, "xuid", "") or "").strip()
+        target_name = str(getattr(target_player, "name", "") or "").strip()
 
-        message = self.language_manager.GetText('TELEPORT_COUNTDOWN').format(target_player.name)
+        def _go(p: Player) -> None:
+            t = self._resolve_online_player(target_xuid, target_name)
+            if t is None:
+                p.send_message(
+                    self.language_manager.GetText("TELEPORT_TARGET_OFFLINE")
+                    or "[弧光核心]目标玩家已离线，传送取消。"
+                )
+                return
+            self.execute_teleport_to_player(p, t)
+
+        self.run_player_task(player, _go, delay=delay)
+
+        message = self.language_manager.GetText('TELEPORT_COUNTDOWN').format(target_name)
         self._send_teleport_countdown_titles(player, message, delay)
 
     def execute_teleport_to_position(self, player: Player, destination_name: str, position: tuple, teleport_type: str, dimension: str = 'overworld'):

@@ -7676,6 +7676,42 @@ class ARCCorePlugin(Plugin):
             pass
         return None
 
+    def run_player_task(self, player: Player, fn: Callable[[Player], None], delay: int = 0):
+        """调度仅对仍在线玩家执行的回调；闭包只存 xuid/name，避免 purecall 崩服。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        name = str(getattr(player, "name", "") or "").strip()
+
+        def _wrapped() -> None:
+            p = self._resolve_online_player(xuid, name)
+            if p is None:
+                return
+            fn(p)
+
+        return self.server.scheduler.run_task(self, _wrapped, delay=delay)
+
+    def run_two_player_task(
+        self,
+        player: Player,
+        target_player: Player,
+        fn: Callable[[Player, Player], None],
+        delay: int = 0,
+    ):
+        """调度需同时解析发起者与目标仍在线的回调。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        name = str(getattr(player, "name", "") or "").strip()
+        target_xuid = str(getattr(target_player, "xuid", "") or "").strip()
+        target_name = str(getattr(target_player, "name", "") or "").strip()
+
+        def _wrapped() -> None:
+            p = self._resolve_online_player(xuid, name)
+            if p is None:
+                return
+            t = self._resolve_online_player(target_xuid, target_name)
+            if t is None:
+                return
+            fn(p, t)
+
+        return self.server.scheduler.run_task(self, _wrapped, delay=delay)
 
     def _resolve_online_player(self, xuid: str = "", name: str = "") -> Optional[Player]:
         """从 online_players 重取活对象；不触碰可能已销毁的旧 Player 引用。"""

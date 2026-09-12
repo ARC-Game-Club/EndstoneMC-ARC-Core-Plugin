@@ -187,6 +187,9 @@ class ARCCorePlugin(Plugin):
         self._chat_prefixes_lock = threading.Lock()
         self._player_chat_prefixes: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self._player_chat_prefixes_lock = threading.Lock()
+        # 传送倒计时任务登记：xuid -> [ScheduledTask]；倒计时期间受伤可打断传送
+        self._pending_teleport_tasks: Dict[str, list] = {}
+        self._pending_teleport_tasks_lock = threading.Lock()
         try:
             self.economy.set_balance_changed_callback(
                 self._on_economy_balance_changed_for_sidebar
@@ -768,6 +771,8 @@ class ARCCorePlugin(Plugin):
             player = self._resolve_player_for_command_sender(sender)
             if player is None:
                 return True
+            # 命令弹出新表单前先关闭当前表单，确保新表单能送达客户端
+            self._close_open_form(player)
             if args and len(args) >= 1:
                 head = args[0].lower()
                 if head == "op":
@@ -824,12 +829,15 @@ class ARCCorePlugin(Plugin):
                 return True
             sub = args[0].lower()
             if sub == "pos1":
+                self._close_open_form(player)
                 self._run_land_pos1_for_player(player)
                 return True
             if sub == "pos2":
+                self._close_open_form(player)
                 self._run_land_pos2_for_player(player)
                 return True
             if sub == "buy":
+                self._close_open_form(player)
                 self._run_land_buy_for_player(player)
                 return True
             player.send_message(self.language_manager.GetText("LAND_COMMAND_USAGE"))
@@ -853,6 +861,8 @@ class ARCCorePlugin(Plugin):
             if not sender.is_op:
                 sender.send_message(self.language_manager.GetText('OP_PANEL_NO_PERMISSION'))
                 return True
+            # pos2 记录坐标后会弹出 OP 工具面板，先关闭当前表单确保面板能弹出
+            self._close_open_form(sender)
             self.record_coordinate_2(sender)
             return True
         if command.name == 'connecttoserver':
@@ -888,6 +898,8 @@ class ARCCorePlugin(Plugin):
                 self._notify_teleport_feature_disabled(sender)
                 return True
             if not args or not str(" ".join(args)).strip():
+                # 命令弹出新表单前先关闭当前表单，确保新表单能送达客户端
+                self._close_open_form(sender)
                 self.show_cross_server_menu(sender, on_close=self.show_main_menu)
                 return True
             server_name = " ".join(args).strip()
@@ -1386,6 +1398,11 @@ class ARCCorePlugin(Plugin):
         self.player_land_creation_pick.pop(player_name, None)
         self.player_land_pick_last_event_ts.pop(player_name, None)
         self._cancel_land_particle_boundary(player_xuid, player_name)
+        try:
+            # 退出时清理未完成的传送倒计时任务
+            self._cancel_pending_teleport_tasks(player)
+        except Exception:
+            pass
         try:
             if getattr(self, "sidebar_system", None) is not None:
                 self.sidebar_system.on_player_quit(player)
@@ -1948,6 +1965,18 @@ class ARCCorePlugin(Plugin):
     @event_handler
     def on_actor_damage(self, event: ActorDamageEvent):
         """处理生物受伤事件，保护领地内生物免受攻击"""
+        # 传送倒计时期间受到伤害：打断传送（PvP/生物/摔落等一切伤害来源）
+        try:
+            damaged_actor = event.actor
+            if (
+                damaged_actor is not None
+                and not event.is_cancelled
+                and isinstance(damaged_actor, Player)
+            ):
+                self._interrupt_pending_teleport_by_damage(damaged_actor)
+        except Exception:
+            pass
+
         # 检查攻击者是否为玩家
         attacker = event.damage_source.actor
         if attacker is None or attacker.type != "minecraft:player":
@@ -8550,6 +8579,80 @@ class ARCCorePlugin(Plugin):
         
         self.start_teleport_to_position_countdown(player, home_name, (home_info['x'], home_info['y'], home_info['z']), 'HOME', home_info['dimension'])
 
+    # ---------- 表单关闭与传送倒计时辅助 ----------
+
+    def _close_open_form(self, player: Player) -> None:
+        """弹出新表单前先关闭玩家当前已打开的表单，确保新表单能立即送达客户端。"""
+        try:
+            player.close_form()
+        except Exception as e:
+            self._safe_log(
+                "warning",
+                f"[ARC Core]close_form failed for {getattr(player, 'name', '?')}: {e}",
+            )
+
+    def _track_pending_teleport_task(self, player: Player, task) -> None:
+        """登记一个传送倒计时相关任务（主传送或倒计时 title），供受伤打断。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        if not xuid or task is None:
+            return
+        with self._pending_teleport_tasks_lock:
+            self._pending_teleport_tasks.setdefault(xuid, []).append(task)
+
+    def _cancel_pending_teleport_tasks(self, player: Player, *, remove: bool = True) -> bool:
+        """取消该玩家所有未执行的传送倒计时任务；返回是否有任务被登记过。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        if not xuid:
+            return False
+        with self._pending_teleport_tasks_lock:
+            if remove:
+                tasks = self._pending_teleport_tasks.pop(xuid, None)
+            else:
+                tasks = self._pending_teleport_tasks.get(xuid)
+            tasks = list(tasks) if tasks else []
+        if not tasks:
+            return False
+        for task in tasks:
+            try:
+                task.cancel()
+            except Exception:
+                pass
+        return True
+
+    def _consume_pending_teleport(self, player: Player) -> None:
+        """传送倒计时到期：解除登记（自身任务正在执行，不再取消）。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        if not xuid:
+            return
+        with self._pending_teleport_tasks_lock:
+            self._pending_teleport_tasks.pop(xuid, None)
+
+    def _schedule_countdown_teleport(
+        self, player: Player, execute_fn: Callable[[Player], None], delay: int = 45
+    ) -> None:
+        """开始一次带倒计时的传送：先打断该玩家上一个未完成的传送，登记新任务；倒计时期间受伤会打断。"""
+        self._cancel_pending_teleport_tasks(player)
+
+        def _go(p: Player) -> None:
+            self._consume_pending_teleport(p)
+            execute_fn(p)
+
+        task = self.run_player_task(player, _go, delay=delay)
+        self._track_pending_teleport_task(player, task)
+
+    def _interrupt_pending_teleport_by_damage(self, player: Player) -> None:
+        """传送倒计时期间受到伤害：打断传送并提示玩家。"""
+        try:
+            if not self._cancel_pending_teleport_tasks(player):
+                return
+            message = (
+                self.language_manager.GetText('TELEPORT_INTERRUPTED_BY_DAMAGE')
+                or '[弧光核心]传送被打断：你受到了伤害。'
+            )
+            player.send_message(message)
+        except Exception:
+            pass
+
     def _send_teleport_countdown_titles(
         self, player: Player, subtitle: str, total_ticks: int = 45
     ) -> None:
@@ -8569,12 +8672,13 @@ class ARCCorePlugin(Plugin):
 
                 return _show
 
-            self.run_player_task(player, _make_show(remaining), delay=i * 20)
+            title_task = self.run_player_task(player, _make_show(remaining), delay=i * 20)
+            self._track_pending_teleport_task(player, title_task)
 
     def start_teleport_to_position_countdown(self, player: Player, destination_name: str, position: tuple, teleport_type: str, dimension: str = 'overworld'):
         """开始传送到位置倒计时"""
         delay = 45
-        self.run_player_task(
+        self._schedule_countdown_teleport(
             player,
             lambda p: self.execute_teleport_to_position(
                 p, destination_name, position, teleport_type, dimension
@@ -8606,7 +8710,7 @@ class ARCCorePlugin(Plugin):
                 return
             self.execute_teleport_to_player(p, t)
 
-        self.run_player_task(player, _go, delay=delay)
+        self._schedule_countdown_teleport(player, _go, delay=delay)
 
         message = self.language_manager.GetText('TELEPORT_COUNTDOWN').format(target_name)
         self._send_teleport_countdown_titles(player, message, delay)
@@ -8681,7 +8785,7 @@ class ARCCorePlugin(Plugin):
         
         # 开始传送倒计时
         delay = 45
-        self.run_player_task(
+        self._schedule_countdown_teleport(
             player,
             self.execute_death_location_teleport,
             delay=delay,
@@ -8734,15 +8838,15 @@ class ARCCorePlugin(Plugin):
         
         # title 倒计时提示 + 延迟执行传送
         delay = 45
+        self._schedule_countdown_teleport(
+            player,
+            self.execute_random_teleport,
+            delay=delay,
+        )
         self._send_teleport_countdown_titles(
             player,
             self.language_manager.GetText('RANDOM_TELEPORT_COUNTDOWN'),
             delay,
-        )
-        self.run_player_task(
-            player,
-            self.execute_random_teleport,
-            delay=delay,
         )
     
     def execute_random_teleport(self, player: Player):
@@ -8945,6 +9049,8 @@ class ARCCorePlugin(Plugin):
                 self.language_manager.GetText('RETURN_BUTTON_TEXT'),
                 on_click=lambda p=target_player, cb=return_to_menu: cb(p),
             )
+        # 发送传送表单前先关闭目标玩家当前表单，确保传送表单能弹出
+        self._close_open_form(target_player)
         target_player.send_form(request_menu)
 
     def get_pending_requests_for_player(self, player: Player) -> list:
@@ -10249,7 +10355,7 @@ class ARCCorePlugin(Plugin):
                 return
         
         tp_target_pos = self.get_land_teleport_point(land_id)
-        self.run_player_task(
+        self._schedule_countdown_teleport(
             player,
             lambda p, l_id=land_id, pos=tp_target_pos: self.delay_teleport_to_land(p, l_id, pos),
             delay=45,

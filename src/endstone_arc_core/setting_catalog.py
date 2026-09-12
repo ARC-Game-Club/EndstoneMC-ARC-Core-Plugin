@@ -256,7 +256,6 @@ SETTING_GROUPS: List[Dict[str, object]] = [
             _s("GUILD_UPGRADE_TO_LARGE_COST", "[全服] 升级大型消耗贡献", "int", placeholder="100000"),
             _s("GUILD_RENAME_COST", "[全服] 公会改名费用", "float", placeholder="0"),
             _s("GUILD_LAND_TELEPORT_CONTRIB_COST", "[本服] 公会领地传送贡献消耗", "int", placeholder="10"),
-            _s("KILL_REWARD_GUILD_CONTRIB_RATIO", "[本服] 击杀金钱转贡献比例", "float", placeholder="0.5"),
         ],
     },
     {

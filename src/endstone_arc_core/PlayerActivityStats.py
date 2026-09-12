@@ -5,7 +5,16 @@ from __future__ import annotations
 import threading
 from typing import Dict, Optional, Tuple
 
-from endstone_arc_core.KillRewardConfig import normalize_entity_type_id
+
+def normalize_entity_type_id(entity_type: str) -> str:
+    """统一为小写，便于统计键一致（原在 KillRewardConfig，杀怪奖励拆至 arc_hunter 后内联至此）。"""
+    s = str(entity_type or "").strip()
+    if not s:
+        return ""
+    if ":" in s:
+        ns, name = s.split(":", 1)
+        return f"{ns.lower()}:{name.lower()}"
+    return s.lower()
 
 
 class PlayerActivityStats:

@@ -896,8 +896,6 @@ DELETE_WARP_FAILED=删除公共传送点失败
 
 # 死亡回归功能
 DEATH_LOCATION_RECORDED=[弧光核心]死亡位置已记录，可在传送菜单中返回死亡地点
-KILL_REWARD_MESSAGE=[弧光核心]击杀了 {0}，获得 {1} 元！
-KILL_REWARD_GUILD_CONTRIB_HINT=[弧光核心]获得公会贡献点 +{0}（我的：{1}，公会：{2}）。
 DEATH_BROADCAST_MESSAGE=[弧光核心]玩家{0}在{1}维度({2}, {3}, {4})死亡了！
 DEATH_BROADCAST_MESSAGE_WITH_CAUSE=[弧光核心]玩家{0}在{1}维度({2}, {3}, {4})因{5}死亡了！
 DEATH_QQ_MESSAGE=💀 玩家 {0} 在 {1} 维度 ({2}, {3}, {4}) 死亡了！

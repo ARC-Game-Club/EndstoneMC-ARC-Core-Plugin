@@ -39,7 +39,6 @@ There are **no tests** in this repository — no test runner, no test files.
 | `LanguageManager.py` | i18n via `key=value` text files (e.g., `ZH-CN.txt`); class-level dict cache |
 | `SettingManager.py` | Config via `core_setting.yml` (`KEY=VALUE` format); class-level dict cache |
 | `EntityDisplayNameManager.py` | Entity display name lookups from `entity_display_name.txt` |
-| `KillRewardConfig.py` | Kill-reward config from `kill_reward.txt` (`minecraft:creeper=10`) |
 | `sky_eye_log.py` | Independent SQLite audit log at `plugins/ARCCore/sky_eye/skyeye.db` with retention pruning and query APIs |
 | `arc_error_log.py` | Thread-safe error logging to `error_log.txt` |
 | `mc_command_format.py` | Utility: quote player names containing spaces for MC commands |
@@ -55,7 +54,6 @@ There are **no tests** in this repository — no test runner, no test files.
    - `ZH-CN.txt` — language strings, same `KEY=VALUE` format
    - `broadcast.txt` — one broadcast message per line, supports `{date}`, `{time}`, `{online_player_number}` placeholders
    - `newbie_welcome.txt` / `newbie_commands.txt` — new-player welcome content and auto-commands (`{player}` placeholder)
-   - `kill_reward.txt` — `minecraft:entity_type=money_amount` per line
    - `entity_display_name.txt` — `entity.minecraft.xxx.name=DisplayName`
    - （成就定义已迁至独立插件 `plugins/ARCAchievement/achievements.json`）
 
@@ -110,6 +108,8 @@ Other EndStone plugins can call methods on the `ARCCorePlugin` instance via `ser
 All API methods are thread-safe.
 
 Achievement logic lives in sibling plugin `endstone_arc_achievement` (`arc_achievement`, data dir `plugins/ARCAchievement/`). Core only forwards「我的信息」内成就按钮到 `/ach`（及 OP 的 `/achop`）when that plugin is present. Stats tables remain on core's SQLite via shared `database_manager`.
+
+Kill rewards (money + guild contribution) live in sibling plugin `endstone_arc_hunter` (`arc_hunter`, 猎魔人, data dir `plugins/ARCHunter/`). Core keeps only kill statistics (`activity_stats.record_kill`) and the achievement notify in `on_actor_death`; it no longer pays kill rewards. `arc_hunter` pays money via core's `api_adjust_player_money` and grants contribution directly via `arc_guild.api_add_guild_contribution` (not through core).
 
 ## Language
 

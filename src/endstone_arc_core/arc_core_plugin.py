@@ -30,7 +30,6 @@ from endstone_arc_core.LandSystem import LandSystem
 from endstone_arc_core.TitleSystem import TitleSystem, DEFAULT_RARITY
 from endstone_arc_core.ConditionalTitle import ConditionalTitleManager, RichestTitleProvider
 from endstone_arc_core.EntityDisplayNameManager import EntityDisplayNameManager
-from endstone_arc_core.KillRewardConfig import KillRewardConfig, normalize_entity_type_id
 from endstone_arc_core.PlayerActivityStats import PlayerActivityStats
 from endstone_arc_core.arc_error_log import append_arc_error_log, format_context_lines
 from endstone_arc_core.sky_eye_log import SkyEyeStore, format_sky_eye_records, prune_sky_eye_logs
@@ -175,8 +174,6 @@ class ARCCorePlugin(Plugin):
             grant_unlock_reward=None,
         )
         self.entity_display_name_manager = EntityDisplayNameManager(Path(MAIN_PATH), logger=None)
-        self.kill_reward_config = KillRewardConfig(Path(MAIN_PATH), logger=None)
-        self.kill_reward_guild_contrib_ratio = self._load_kill_reward_guild_contrib_ratio()
         self.activity_stats = PlayerActivityStats(self.database_manager, logger=None)
         self.sidebar_system = SidebarSystem(self)
         # 主菜单按钮注册表：button_id -> {text, on_click, priority, visible}
@@ -484,7 +481,6 @@ class ARCCorePlugin(Plugin):
         self.land_system.set_logger(self.logger)
         self.land_system.reload_config()
         self.entity_display_name_manager.logger = self.logger
-        self.kill_reward_config.logger = self.logger
         self.activity_stats.logger = self.logger
         try:
             self.activity_stats.start_writer()
@@ -2134,39 +2130,11 @@ class ARCCorePlugin(Plugin):
     def _process_actor_kill_reward(
         self, killer_xuid: str, killer_name: str, dead_type_key: str
     ) -> None:
+        """击杀统计与成就联动留在核心；金钱奖励/公会贡献点已拆至 arc_hunter（弧光猎魔人）。"""
         try:
             if killer_xuid:
                 self.activity_stats.record_kill(killer_xuid, dead_type_key)
                 self._notify_achievement_activity(killer_xuid, "kill", dead_type_key)
-        except Exception:
-            pass
-
-        try:
-            reward = self.kill_reward_config.get_reward_and_ensure_key(dead_type_key)
-            if reward <= 0:
-                return
-            killer = self._find_online_player_by_xuid(killer_xuid)
-            if killer is None and killer_name:
-                killer = self.server.get_player(killer_name)
-            pay_name = killer_name
-            if killer is not None:
-                pay_name = str(getattr(killer, "name", "") or killer_name)
-            if not pay_name:
-                return
-            if self.increase_player_money_by_name(
-                pay_name, reward, notify=False, defer_richest=True
-            ):
-                display_name = self.entity_display_name_manager.get_display_name_for_entity_type(
-                    dead_type_key
-                )
-                if killer is not None:
-                    killer.send_message(
-                        self.language_manager.GetText("KILL_REWARD_MESSAGE").format(
-                            display_name,
-                            self._format_money_display(reward),
-                        )
-                    )
-                    self._grant_kill_guild_contribution(killer, reward)
         except Exception:
             pass
 
@@ -2322,17 +2290,6 @@ class ARCCorePlugin(Plugin):
         except Exception:
             pass
 
-    def _load_kill_reward_guild_contrib_ratio(self) -> float:
-        """读取 KILL_REWARD_GUILD_CONTRIB_RATIO；非法/缺省按 0 处理。"""
-        raw = self.setting_manager.GetSetting("KILL_REWARD_GUILD_CONTRIB_RATIO")
-        try:
-            ratio = float(str(raw).strip())
-        except (ValueError, TypeError, AttributeError):
-            ratio = 0.0
-        if ratio < 0:
-            ratio = 0.0
-        return ratio
-
     def _guild_plugin(self):
         """软依赖：arc_guild 插件实例；未安装或异常返回 None。"""
         try:
@@ -2481,53 +2438,6 @@ class ARCCorePlugin(Plugin):
         if gid <= 0:
             return None, None, "GUILD_NOT_FOUND"
         return gid, str(r.get("guild_name") or str(gid)), None
-
-    def _grant_kill_guild_contribution(self, killer, reward: float) -> None:
-        """按 KILL_REWARD_GUILD_CONTRIB_RATIO 把击杀金钱奖励折算为公会贡献点；未加入公会则跳过。"""
-        try:
-            ratio = float(getattr(self, "kill_reward_guild_contrib_ratio", 0.0) or 0.0)
-            if ratio <= 0 or reward <= 0:
-                return
-            points = int(float(reward) * ratio)
-            if points <= 0:
-                return
-            xuid = str(getattr(killer, "xuid", "") or "")
-            if not xuid:
-                return
-            plugin = self._guild_plugin()
-            if plugin is None:
-                return
-            fn = getattr(plugin, "api_add_guild_contribution", None)
-            if not callable(fn):
-                return
-            r = fn(xuid=xuid, points=points)
-            ok_gc = bool(isinstance(r, dict) and r.get("success"))
-            info_gc = (r or {}).get("info") or {}
-            err_gc = (r or {}).get("error") or ""
-            if ok_gc:
-                tmpl = self.language_manager.GetText("KILL_REWARD_GUILD_CONTRIB_HINT")
-                if not (tmpl and str(tmpl).strip()):
-                    tmpl = "[弧光核心]获得公会贡献点 +{0}（我的：{1}，公会：{2}）。"
-                try:
-                    killer.send_message(
-                        tmpl.format(
-                            int(points),
-                            int(info_gc.get("personal", 0)),
-                            int(info_gc.get("guild_total", 0)),
-                        )
-                    )
-                except Exception:
-                    pass
-            elif err_gc and err_gc != "GUILD_NOT_IN_GUILD" and self.logger:
-                self.logger.warning(
-                    f"[ARC Core]kill guild contribution failed xuid={xuid!r} err={err_gc!r}"
-                )
-        except Exception as e:
-            try:
-                if self.logger:
-                    self.logger.error(f"[ARC Core]_grant_kill_guild_contribution error: {e}")
-            except Exception:
-                pass
 
     def _player_matches_land_owner_key(self, player: Player, owner_key: str) -> bool:
         """领地 / 子领地主人键（Player_/GUILD_/PUBLIC）是否与玩家匹配。
@@ -13708,7 +13618,6 @@ class ARCCorePlugin(Plugin):
             self._load_newbie_files()
             self.language_manager.ReloadCurrentLanguage()
             self.entity_display_name_manager.reload()
-            self.kill_reward_config.reload()
             if self.sync_server and self.sync_server.is_running():
                 self.sync_server.broadcast_settings()
             if self.sync_client and self.sync_client.is_running():
@@ -13792,7 +13701,6 @@ class ARCCorePlugin(Plugin):
                 self.small_horn_price_per_hour = 60
             self._init_cleaner_system()
             self._init_mspt_emergency_shutdown_settings()
-            self.kill_reward_guild_contrib_ratio = self._load_kill_reward_guild_contrib_ratio()
             try:
                 if getattr(self, "sidebar_system", None) is not None:
                     self.sidebar_system.reload_config()

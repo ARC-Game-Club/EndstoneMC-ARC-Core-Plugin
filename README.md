@@ -142,11 +142,9 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
   - `CHECKIN_REWARD_PICK_MIN` / `CHECKIN_REWARD_PICK_MAX`：每日随机抽取物品奖励条数区间
 - **签到公会贡献点（v0.7.3）**：`CHECKIN_GUILD_CONTRIBUTION_POINTS`（默认 `10`）— 签到成功时，若玩家 **已加入公会**，则按 `GuildSystem.add_contribution_by_xuid` 同时增加 **私人贡献点** 与 **公会公共贡献点**；未加入公会则跳过（不报错）。设为 `0` 可关闭。可在 **OP 面板 → 签到配置 → 配置存款与随机条数** 表单最后一项编辑，或直接改 `core_setting.yml`
 
-### 💀 击杀生物金钱奖励（v0.4.0）
-- 独立配置文件 **`kill_reward.txt`**（与 `core_setting.yml` 同级目录），格式：`minecraft:creeper=10`（击杀一个苦力怕获得 10 元）
-- 首次击杀某种生物且配置中无该类型时，自动追加 `类型ID=0`，不提示；仅当金额 **> 0** 时提示「击杀了 xx 获得 xx 元」
-- 显示名优先通过 **`entity_display_name.txt`** 中 `entity.minecraft.xxx.name` 等键解析（`EntityDisplayNameManager.get_display_name_for_entity_type`）
-- **击杀 → 公会贡献点（v0.7.5）**：`KILL_REWARD_GUILD_CONTRIB_RATIO`（默认 `0`）— 玩家在已加入公会时，每次成功扣发击杀金钱奖励后按 `floor(reward * ratio)` 额外获得公会贡献点；同步累加 **私人贡献点** 与 **公会公共贡献点**。例如 `kill_reward.txt` 配置 `minecraft:creeper=10` 且比例为 `0.5`，则击杀苦力怕在获得 10 元的同时获得 5 公会贡献点。比例 `0` 或 `floor(reward*ratio) <= 0` 或玩家未加入公会时静默跳过
+### 💀 击杀生物金钱奖励（已拆至独立插件）
+- 击杀金钱奖励与「击杀 → 公会贡献点」已拆出至独立插件 **arc_hunter**（`EndstoneMC-ARC-Hunter`，弧光猎魔人）：配置文件 `plugins/ARCHunter/kill_reward.txt`，贡献点直连 arc_guild API
+- 核心仅保留击杀统计（活跃统计 / 成就联动），不再发放杀怪奖励
 
 ### 📍 传送系统
 - **功能开关（v0.8.19）** - 传送面板每项可单独开关，默认全开：`ENABLE_TELEPORT_PUBLIC_WARP`、`ENABLE_TELEPORT_HOME`、`ENABLE_RANDOM_TELEPORT`、`ENABLE_TELEPORT_DEATH_LOCATION`、`ENABLE_TELEPORT_PLAYER`、`ENABLE_TELEPORT_CROSS_SERVER`。关闭后传送系统面板不显示对应按钮（`/connecttoserver` 在跨服关闭时也不可用）。可在 **OP 面板 → 配置文件设置 → 传送** 中修改
@@ -221,7 +219,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - **领地管理**：管理所有领地、管理脚下领地、重建领地区块映射；**公共领地** 详情内可 **重设公共领地范围**（与玩家重设流程一致，不扣款）（返回统一回到领地管理子菜单）
 - **传送管理**：**管理公共传送点**（创建/删除 Warp）；**传送参数配置**（`MAX_PLAYER_HOME_NUM`、随机传送中心/半径、各类传送费用等）；各项传送开关见 **配置文件设置 → 传送**
 - 邀请奖励配置、**签到配置**（v0.4.2：总览展示当前存款/随机条数区间/奖励条目数；**配置存款与随机条数** 弹窗表单，v0.7.3 起含 **每日签到公会贡献点**；**配置物品奖励列表** 支持按条目进入编辑/删除与新增）、头衔管理、成就管理
-- **重载配置** - 重载 `core_setting`、广播、语言、**entity_display_name.txt**、**kill_reward.txt** 等
+- **重载配置** - 重载 `core_setting`、广播、语言、**entity_display_name.txt** 等（杀怪奖励配置改用 `/archunter reload`）
 - **调试模式**（v0.3.0）：开启后，在方块破坏/放置、方块交互、生物攻击、生物交互时向该 OP 发送聊天调试消息（事件类型、目标、维度、位置）
 
 ### 🏷️ 头衔系统（v0.3.0，表结构 v0.7.1）

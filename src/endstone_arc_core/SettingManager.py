@@ -28,6 +28,13 @@ class SettingManager:
                     key, value = line.split("=", 1)
                     SettingManager.setting_dict[key.strip()] = value.strip()
 
+        # 首启播种：配置文件缺失或为空时补写关键默认值。
+        # 不播种的话 DATABASE_PATH 读成 None，主插件 __init__ 里 Path/None 直接崩掉整个插件加载。
+        if not SettingManager.setting_dict:
+            with self.setting_file_path.open("a", encoding="utf-8") as f:
+                f.write("DATABASE_PATH=ARCCore.db\n")
+            SettingManager.setting_dict["DATABASE_PATH"] = "ARCCore.db"
+
     def GetSetting(self, key):
         # If key doesn't exist in settings, add it
         if key not in SettingManager.setting_dict:

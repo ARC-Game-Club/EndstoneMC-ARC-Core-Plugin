@@ -151,7 +151,9 @@ class ARCCorePlugin(Plugin):
         self.setting_manager = SettingManager()
         default_language_dode = self.setting_manager.GetSetting('DEFAULT_LANGUAGE_CODE')
         self.language_manager = LanguageManager(default_language_dode if default_language_dode is not None else 'ZH-CN')
-        self.database_manager = DatabaseManager(Path(MAIN_PATH) / self.setting_manager.GetSetting('DATABASE_PATH'))
+        # DATABASE_PATH 为空（如空配置文件被自动补写成空键）时回退默认库名，避免初始化崩溃
+        database_path = self.setting_manager.GetSetting('DATABASE_PATH') or 'ARCCore.db'
+        self.database_manager = DatabaseManager(Path(MAIN_PATH) / database_path)
         self.sky_eye_store = SkyEyeStore(Path(MAIN_PATH) / SKY_EYE_LOG_DIR_NAME / SKY_EYE_DB_NAME)
         self._sky_eye_hand_cache: dict[str, str] = {}
         self._sky_eye_land_meta: dict[int, tuple] = {}

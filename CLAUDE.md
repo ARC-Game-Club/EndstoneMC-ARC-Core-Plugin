@@ -42,6 +42,7 @@ There are **no tests** in this repository — no test runner, no test files.
 | `sky_eye_log.py` | Independent SQLite audit log at `plugins/ARCCore/sky_eye/skyeye.db` with retention pruning and query APIs |
 | `arc_error_log.py` | Thread-safe error logging to `error_log.txt` |
 | `mc_command_format.py` | Utility: quote player names containing spaces for MC commands |
+| `ui_icons.py` | Form-button icon path constants (client RP 弧光核心RP `textures/arc_core/*.png`, always with `.png`). Main-menu buttons fall back to `DEFAULT` (ARC logo) when a plugin registers without `icon`; `UI_ICONS_ENABLED` (default on) disables all form icons |
 
 ### Key Design Patterns
 

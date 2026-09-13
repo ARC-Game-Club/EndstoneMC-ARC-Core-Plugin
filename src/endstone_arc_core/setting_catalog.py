@@ -77,6 +77,7 @@ SETTING_GROUPS: List[Dict[str, object]] = [
                 choices=QQ_DEATH_BROADCAST_CHOICES,
             ),
             _s("ENABLE_CLEANER", "启用清道夫", "bool", choices=BOOL_CHOICES),
+            _s("UI_ICONS_ENABLED", "表单按钮图标（需客户端资源包）", "bool", choices=BOOL_CHOICES),
             _s("CLEANER_INTERVAL", "清道夫间隔（秒）", "int", placeholder="300"),
             _s("SMALL_HORN_PRICE_PER_HOUR", "小喇叭每小时费用", "int", placeholder="60"),
             _s("BLOCK_ALL_EXPLOSIONS", "全局拦截爆炸", "bool", choices=BOOL_CHOICES),

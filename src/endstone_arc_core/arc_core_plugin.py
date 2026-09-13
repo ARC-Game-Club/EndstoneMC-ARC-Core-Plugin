@@ -38,6 +38,7 @@ from endstone_arc_core.sync_client import SyncClient
 from endstone_arc_core.sync_config import ALL_SHARED_SETTING_KEYS, resolve_sync_consumer_mode
 from endstone_arc_core.SidebarSystem import SidebarSystem
 from endstone_arc_core import bedrock_glyphs
+from endstone_arc_core import ui_icons
 
 MAIN_PATH = 'plugins/ARCCore'
 # 旧版一次性导入占位 uuid 前缀（进服时覆写为真实 unique_id）
@@ -4894,10 +4895,19 @@ class ARCCorePlugin(Plugin):
         arc_menu = ActionForm(
             title=self.language_manager.GetText('MAIN_MENU_TITLE'),
         )
-        for text, on_click in self._iter_main_menu_buttons_for_player(player):
-            arc_menu.add_button(text, on_click=on_click)
+        for text, icon, on_click in self._iter_main_menu_buttons_for_player(player):
+            arc_menu.add_button(text, icon=self._ui_icon(icon), on_click=on_click)
         arc_menu.on_close = None
         player.send_form(arc_menu)
+
+    def _ui_icon(self, icon) -> Optional[str]:
+        """UI_ICONS_ENABLED 关闭时整体降级为无图标；开启时原样返回路径
+        （客户端资源包缺失该贴图时 Bedrock 会自动不显示，不会报错）。"""
+        if icon is None:
+            return None
+        if not ui_icons.is_enabled_value(self.setting_manager.get_existing("UI_ICONS_ENABLED")):
+            return None
+        return str(icon)
 
     def _put_main_menu_button(
         self,
@@ -4906,8 +4916,9 @@ class ARCCorePlugin(Plugin):
         on_click,
         priority=6,
         visible=None,
+        icon=None,
     ) -> bool:
-        """内部注册主菜单按钮。text/priority 可为常量或按玩家计算的 callable。"""
+        """内部注册主菜单按钮。text/priority/icon 可为常量或按玩家计算的 callable。"""
         bid = str(button_id or "").strip()
         if not bid or on_click is None or not callable(on_click):
             return False
@@ -4919,6 +4930,7 @@ class ARCCorePlugin(Plugin):
             "on_click": on_click,
             "priority": priority,
             "visible": visible,
+            "icon": icon,
         }
         with self._main_menu_buttons_lock:
             self._main_menu_buttons[bid] = entry
@@ -4932,12 +4944,14 @@ class ARCCorePlugin(Plugin):
             text=lambda _p: lm.GetText("CHECKIN_MENU_BUTTON"),
             on_click=self.show_daily_checkin_panel,
             priority=lambda p: 0 if not self._player_has_checked_in_today(p) else 99,
+            icon=ui_icons.CHECKIN,
         )
         self._put_main_menu_button(
             "arc_core:newbie",
             text=lambda _p: lm.GetText("NEWBIE_GUIDE_BUTTON"),
             on_click=self.show_newbie_welcome_panel,
             priority=3,
+            icon=ui_icons.NEWBIE,
         )
         self._put_main_menu_button(
             "arc_core:teleport",
@@ -4945,6 +4959,7 @@ class ARCCorePlugin(Plugin):
             on_click=self.show_teleport_menu,
             priority=4,
             visible=lambda _p: self._teleport_menu_has_any_feature(),
+            icon=ui_icons.TELEPORT,
         )
         self._put_main_menu_button(
             "arc_core:land",
@@ -4952,12 +4967,14 @@ class ARCCorePlugin(Plugin):
             on_click=self.show_land_main_menu,
             priority=5,
             visible=lambda p: self._is_land_system_enabled() and (self._is_land_claim_allowed() or p.is_op),
+            icon=ui_icons.LAND,
         )
         self._put_main_menu_button(
             "arc_core:bank",
             text=lambda _p: lm.GetText("BANK_MENU_NAME"),
             on_click=self.show_bank_main_menu,
             priority=6,
+            icon=ui_icons.BANK,
         )
         # 公会入口由 arc_guild 插件 api_register_main_menu_button 自行注册
         self._put_main_menu_button(
@@ -4965,6 +4982,7 @@ class ARCCorePlugin(Plugin):
             text=lambda _p: lm.GetText("MAIN_MENU_TOOLS_BUTTON"),
             on_click=self.show_arc_tools_menu,
             priority=8,
+            icon=ui_icons.TOOLS,
         )
         self._put_main_menu_button(
             "arc_core:op",
@@ -4972,6 +4990,7 @@ class ARCCorePlugin(Plugin):
             on_click=self.show_op_main_panel,
             priority=50,
             visible=lambda p: bool(getattr(p, "is_op", False)),
+            icon=ui_icons.OP,
         )
 
     def _iter_main_menu_buttons_for_player(self, player: Player):
@@ -5003,11 +5022,16 @@ class ARCCorePlugin(Plugin):
             on_click = entry.get("on_click")
             if on_click is None or not callable(on_click):
                 continue
-            resolved.append((priority, text, entry.get("button_id", ""), on_click))
+            icon = entry.get("icon")
+            try:
+                icon = icon(player) if callable(icon) else icon
+            except Exception:
+                icon = None
+            resolved.append((priority, text, entry.get("button_id", ""), icon, on_click))
         # 0 最高；同优先级按文本首字符（整串比较）再按 button_id 稳定排序
         resolved.sort(key=lambda item: (item[0], item[1], item[2]))
-        for _priority, text, _bid, on_click in resolved:
-            yield text, on_click
+        for _priority, text, _bid, icon, on_click in resolved:
+            yield text, icon, on_click
 
     def api_register_main_menu_button(
         self,
@@ -5015,14 +5039,17 @@ class ARCCorePlugin(Plugin):
         text: str,
         on_click,
         priority: int = 6,
+        icon=None,
     ) -> bool:
-        """供其它插件注册 ARC 主菜单按钮。priority 越小越靠前（0 最高）；同优先级按文本排序。"""
+        """供其它插件注册 ARC 主菜单按钮。priority 越小越靠前（0 最高）；同优先级按文本排序。
+        icon 可选，为自定义资源包贴图路径（带 .png）；未提供则无图标。"""
         try:
             return self._put_main_menu_button(
                 button_id,
                 text=str(text),
                 on_click=on_click,
                 priority=int(priority),
+                icon=icon,
             )
         except Exception as e:
             try:
@@ -5357,14 +5384,24 @@ class ARCCorePlugin(Plugin):
         )
         tools_form.add_button(
             self.language_manager.GetText("MAIN_MENU_MY_INFO_NAME"),
+            icon=self._ui_icon(ui_icons.MY_INFO),
             on_click=self.show_my_info_panel,
         )
         tools_form.add_button(
             self.language_manager.GetText("SMALL_HORN_MENU_BUTTON"),
+            icon=self._ui_icon(ui_icons.HORN),
             on_click=lambda p: self.show_small_horn_buy_panel(p, on_panel_close=self.show_arc_tools_menu),
         )
-        tools_form.add_button(self.language_manager.GetText("SUICIDE_FUNC_BUTTON"), on_click=self.execute_suicide)
-        tools_form.add_button(self.language_manager.GetText("RETURN_BUTTON_TEXT"), on_click=self.show_main_menu)
+        tools_form.add_button(
+            self.language_manager.GetText("SUICIDE_FUNC_BUTTON"),
+            icon=self._ui_icon(ui_icons.SUICIDE),
+            on_click=self.execute_suicide,
+        )
+        tools_form.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_main_menu,
+        )
         player.send_form(tools_form)
 
     def execute_suicide(self, player: Player):
@@ -5385,6 +5422,7 @@ class ARCCorePlugin(Plugin):
         )
         newbie_form.add_button(
             self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.BACK),
             on_click=self.show_main_menu
         )
         player.send_form(newbie_form)
@@ -5444,6 +5482,7 @@ class ARCCorePlugin(Plugin):
         if not inviter_xuid:
             my_info_panel.add_button(
                 self.language_manager.GetText('MY_INFO_FILL_INVITER_BUTTON'),
+                icon=self._ui_icon(ui_icons.FILL_INVITER),
                 on_click=self.show_fill_inviter_panel
             )
 
@@ -5451,12 +5490,14 @@ class ARCCorePlugin(Plugin):
         if pending_times > 0:
             my_info_panel.add_button(
                 self.language_manager.GetText('MY_INFO_CLAIM_INVITE_REWARD_BUTTON'),
+                icon=self._ui_icon(ui_icons.CLAIM_REWARD),
                 on_click=self.claim_invite_rewards
             )
 
         # 头衔管理
         my_info_panel.add_button(
             self.language_manager.GetText('TITLE_MANAGE_BUTTON'),
+            icon=self._ui_icon(ui_icons.TITLE_MANAGE),
             on_click=self.show_title_manage_panel
         )
 
@@ -5464,17 +5505,20 @@ class ARCCorePlugin(Plugin):
         if self.server.plugin_manager.get_plugin('arc_achievement'):
             my_info_panel.add_button(
                 self.language_manager.GetText('MY_ACHIEVEMENTS_BUTTON'),
+                icon=self._ui_icon(ui_icons.ACHIEVEMENTS),
                 on_click=self.show_arc_achievement_menu,
             )
 
         my_info_panel.add_button(
             self.language_manager.GetText('CHANGE_PASSWORD_BUTTON'),
+            icon=self._ui_icon(ui_icons.CHANGE_PASSWORD),
             on_click=self.show_change_password_panel,
         )
 
         # 返回工具菜单
         my_info_panel.add_button(
             self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.BACK),
             on_click=self.show_arc_tools_menu,
         )
 
@@ -6869,6 +6913,7 @@ class ARCCorePlugin(Plugin):
             )
             panel.add_button(
                 self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+                icon=self._ui_icon(ui_icons.BACK),
                 on_click=self.show_main_menu,
             )
             player.send_form(panel)
@@ -7686,11 +7731,22 @@ class ARCCorePlugin(Plugin):
                 self._format_money_display(self.get_player_money(player))
             )
         )
-        bank_main_menu.add_button(self.language_manager.GetText('BANK_MAIN_MENU_TRANSFER_BUTTON_TEXT'), on_click=self.show_transfer_panel)
-        bank_main_menu.add_button(self.language_manager.GetText('BANK_MAIN_MENU_MONEY_RANK_BUTTON_TEXT'),on_click=self.show_money_rank_panel)
+        bank_main_menu.add_button(
+            self.language_manager.GetText('BANK_MAIN_MENU_TRANSFER_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.TRANSFER),
+            on_click=self.show_transfer_panel,
+        )
+        bank_main_menu.add_button(
+            self.language_manager.GetText('BANK_MAIN_MENU_MONEY_RANK_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.MONEY_RANK),
+            on_click=self.show_money_rank_panel,
+        )
         # 返回
-        bank_main_menu.add_button(self.language_manager.GetText('RETURN_BUTTON_TEXT'),
-                                  on_click=self.show_main_menu)
+        bank_main_menu.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_main_menu,
+        )
         player.send_form(bank_main_menu)
 
     def show_transfer_panel(self, player: Player):
@@ -8107,46 +8163,48 @@ class ARCCorePlugin(Plugin):
             public_warp_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_PUBLIC_WARP_BUTTON')
             if ts.teleport_cost_public_warp > 0:
                 public_warp_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(public_warp_text, ts.teleport_cost_public_warp)
-            teleport_main_menu.add_button(public_warp_text, on_click=self.show_public_warp_menu)
-        
+            teleport_main_menu.add_button(public_warp_text, icon=self._ui_icon(ui_icons.WARP), on_click=self.show_public_warp_menu)
+
         # 私人传送点按钮
         if ts.enable_teleport_home:
             home_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_HOME_BUTTON')
             if ts.teleport_cost_home > 0:
                 home_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(home_text, ts.teleport_cost_home)
-            teleport_main_menu.add_button(home_text, on_click=self.show_home_menu)
-        
+            teleport_main_menu.add_button(home_text, icon=self._ui_icon(ui_icons.HOME), on_click=self.show_home_menu)
+
         # 随机传送按钮
         if ts.enable_random_teleport:
             random_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_RANDOM_BUTTON')
             if ts.teleport_cost_random > 0:
                 random_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(random_text, ts.teleport_cost_random)
-            teleport_main_menu.add_button(random_text, on_click=self.start_random_teleport)
-        
+            teleport_main_menu.add_button(random_text, icon=self._ui_icon(ui_icons.RANDOM_TP), on_click=self.start_random_teleport)
+
         # 如果玩家有死亡位置记录，显示返回死亡地点的按钮
         if ts.enable_teleport_death_location and ts.has_death_location(player.name):
             death_location = ts.get_death_location(player.name)
             death_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_DEATH_LOCATION_BUTTON').format(death_location['dimension'])
             if ts.teleport_cost_death_location > 0:
                 death_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(death_text, ts.teleport_cost_death_location)
-            teleport_main_menu.add_button(death_text, on_click=self.teleport_to_death_location)
-        
+            teleport_main_menu.add_button(death_text, icon=self._ui_icon(ui_icons.DEATH_TP), on_click=self.teleport_to_death_location)
+
         # 玩家传送请求按钮
         if ts.enable_teleport_player:
             player_request_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_PLAYER_REQUEST_BUTTON')
             if ts.teleport_cost_player > 0:
                 player_request_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(player_request_text, ts.teleport_cost_player)
-            teleport_main_menu.add_button(player_request_text, on_click=self.show_player_teleport_request_menu)
+            teleport_main_menu.add_button(player_request_text, icon=self._ui_icon(ui_icons.TPA), on_click=self.show_player_teleport_request_menu)
 
         # 跨服传送按钮
         if ts.enable_teleport_cross_server:
             teleport_main_menu.add_button(
                 self.language_manager.GetText('TELEPORT_MAIN_MENU_CROSS_SERVER_BUTTON'),
+                icon=self._ui_icon(ui_icons.CROSS_SERVER),
                 on_click=self.show_cross_server_menu
             )
-        
+
         # 返回
         teleport_main_menu.add_button(self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+                                      icon=self._ui_icon(ui_icons.BACK),
                                       on_click=self.show_main_menu)
         player.send_form(teleport_main_menu)
 
@@ -9892,16 +9950,28 @@ class ARCCorePlugin(Plugin):
             content=self.language_manager.GetText('LAND_MAIN_MENU_CONTENT').format(
                 self.get_player_land_count(str(player.xuid)))
         )
-        land_main_menu.add_button(self.language_manager.GetText('LAND_MAIN_MENU_MANAGE_LAND_TEXT'),
-                                  on_click=self.show_own_land_menu)
+        land_main_menu.add_button(
+            self.language_manager.GetText('LAND_MAIN_MENU_MANAGE_LAND_TEXT'),
+            icon=self._ui_icon(ui_icons.LAND_MANAGE),
+            on_click=self.show_own_land_menu,
+        )
         if self._is_land_claim_allowed():
-            land_main_menu.add_button(self.language_manager.GetText('LAND_MAIN_MENU_CREATE_NEW_LAND_TEXT'),
-                                      on_click=self.start_interactive_land_creation)
-        land_main_menu.add_button(self.language_manager.GetText('LAND_MAIN_MENU_CHECK_CURRENT_LAND_TEXT'),
-                                  on_click=self.show_current_land_info)
+            land_main_menu.add_button(
+                self.language_manager.GetText('LAND_MAIN_MENU_CREATE_NEW_LAND_TEXT'),
+                icon=self._ui_icon(ui_icons.LAND_CREATE),
+                on_click=self.start_interactive_land_creation,
+            )
+        land_main_menu.add_button(
+            self.language_manager.GetText('LAND_MAIN_MENU_CHECK_CURRENT_LAND_TEXT'),
+            icon=self._ui_icon(ui_icons.LAND_CHECK),
+            on_click=self.show_current_land_info,
+        )
         # 返回
-        land_main_menu.add_button(self.language_manager.GetText('RETURN_BUTTON_TEXT'),
-                                  on_click=self.show_main_menu)
+        land_main_menu.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_main_menu,
+        )
         player.send_form(land_main_menu)
 
     def show_own_land_menu(self, player: Player):
@@ -13065,30 +13135,41 @@ class ARCCorePlugin(Plugin):
             title=self.language_manager.GetText('OP_PANEL_TITLE')
         )
         op_main_panel.add_button(self.language_manager.GetText('OP_PANEL_RELOAD_CONFIG_BUTTON'),
+                                 icon=self._ui_icon(ui_icons.OP_RELOAD),
                                  on_click=self.op_reload_config)
         op_main_panel.add_button(self.language_manager.GetText('OP_CORE_SETTINGS_BUTTON'),
+                                 icon=self._ui_icon(ui_icons.OP_SETTINGS),
                                  on_click=self.show_op_core_settings_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_TOOLS_ENTRY'),
+                                 icon=self._ui_icon(ui_icons.TOOLS),
                                  on_click=self.show_op_tools_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_ECONOMY_MANAGE_ENTRY'),
+                                 icon=self._ui_icon(ui_icons.BANK),
                                  on_click=self.show_economy_manage_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_LAND_MANAGE_ENTRY'),
+                                 icon=self._ui_icon(ui_icons.LAND),
                                  on_click=self.show_op_land_manage_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_TELEPORT_MANAGE_ENTRY'),
+                                 icon=self._ui_icon(ui_icons.TELEPORT),
                                  on_click=self.show_op_teleport_manage_panel)
         if self.server.plugin_manager.get_plugin('arc_achievement'):
             op_main_panel.add_button(
                 self.language_manager.GetText('OP_ACHIEVEMENT_MANAGE_BUTTON'),
+                icon=self._ui_icon(ui_icons.ACHIEVEMENTS),
                 on_click=self.show_arc_achievement_op_menu,
             )
         op_main_panel.add_button(self.language_manager.GetText('CHECKIN_CONFIG_OP_BUTTON'),
+                                 icon=self._ui_icon(ui_icons.CHECKIN),
                                  on_click=self.show_checkin_config_panel)
         op_main_panel.add_button(self.language_manager.GetText('INVITE_REWARD_CONFIG_BUTTON'),
+                                 icon=self._ui_icon(ui_icons.CLAIM_REWARD),
                                  on_click=self.show_invite_reward_config_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_TITLE_MANAGE_BUTTON'),
+                                 icon=self._ui_icon(ui_icons.TITLE_MANAGE),
                                  on_click=self.show_op_title_manage_panel)
         # 公会管理已拆至 arc_guild（/arcguildop），核心 OP 面板不再入口
         op_main_panel.add_button(self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+                                  icon=self._ui_icon(ui_icons.BACK),
                                   on_click=self.show_main_menu)
         player.send_form(op_main_panel)
 

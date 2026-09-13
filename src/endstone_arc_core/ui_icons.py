@@ -51,6 +51,37 @@ OP_SETTINGS = f"{_BASE}/op_settings.png"
 
 # 通用
 BACK = f"{_BASE}/back.png"
+# 默认兜底图标（ARC logo）：主菜单按钮没有专属图标时使用
+DEFAULT = f"{_BASE}/default.png"
+
+# 外部插件主菜单按钮图标（按 button_id 映射，贴图由 弧光核心RP 提供）
+BUTTON_SHOP = f"{_BASE}/button_shop.png"
+SIGN_SHOP = f"{_BASE}/sign_shop.png"
+DTWT = f"{_BASE}/dtwt.png"
+ESPER = f"{_BASE}/esper.png"
+PVP_KD = f"{_BASE}/pvp_kd.png"
+SHOOTER = f"{_BASE}/shooter.png"
+STOCK = f"{_BASE}/stock.png"
+USHOP = f"{_BASE}/ushop.png"
+ATTRIBUTE = f"{_BASE}/attribute.png"
+
+BUTTON_ICONS = {
+    "arc_guild:menu": GUILD,
+    "arc_button_shop:main": BUTTON_SHOP,
+    "arc_sign_shop:main": SIGN_SHOP,
+    "arc_dtwt:main": DTWT,
+    "arc_esper_career:menu": ESPER,
+    "arc_pvp_kd:main": PVP_KD,
+    "arc_shooter_game:main": SHOOTER,
+    "up_and_down:main": STOCK,
+    "ushop:main": USHOP,
+    "arc_attribute_core:feature_menu": ATTRIBUTE,
+}
+
+
+def get_for_button(button_id) -> str:
+    """按主菜单 button_id 取图标；未收录的按钮回退 ARC logo 兜底图。"""
+    return BUTTON_ICONS.get(str(button_id or "").strip(), DEFAULT)
 
 
 def is_enabled_value(raw) -> bool:

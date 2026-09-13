@@ -4895,8 +4895,13 @@ class ARCCorePlugin(Plugin):
         arc_menu = ActionForm(
             title=self.language_manager.GetText('MAIN_MENU_TITLE'),
         )
-        for text, icon, on_click in self._iter_main_menu_buttons_for_player(player):
-            arc_menu.add_button(text, icon=self._ui_icon(icon), on_click=on_click)
+        for text, icon, bid, on_click in self._iter_main_menu_buttons_for_player(player):
+            # 三级回退：按钮自带 icon -> 按 button_id 映射外部插件图标 -> ARC logo 兜底
+            arc_menu.add_button(
+                text,
+                icon=self._ui_icon(icon or ui_icons.get_for_button(bid)),
+                on_click=on_click,
+            )
         arc_menu.on_close = None
         player.send_form(arc_menu)
 
@@ -4994,7 +4999,7 @@ class ARCCorePlugin(Plugin):
         )
 
     def _iter_main_menu_buttons_for_player(self, player: Player):
-        """按优先级升序（同优先级按按钮文本）产出 (text, on_click)。"""
+        """按优先级升序（同优先级按按钮文本）产出 (text, icon, button_id, on_click)。"""
         with self._main_menu_buttons_lock:
             entries = list(self._main_menu_buttons.values())
         resolved = []
@@ -5030,8 +5035,8 @@ class ARCCorePlugin(Plugin):
             resolved.append((priority, text, entry.get("button_id", ""), icon, on_click))
         # 0 最高；同优先级按文本首字符（整串比较）再按 button_id 稳定排序
         resolved.sort(key=lambda item: (item[0], item[1], item[2]))
-        for _priority, text, _bid, icon, on_click in resolved:
-            yield text, icon, on_click
+        for _priority, text, bid, icon, on_click in resolved:
+            yield text, icon, bid, on_click
 
     def api_register_main_menu_button(
         self,

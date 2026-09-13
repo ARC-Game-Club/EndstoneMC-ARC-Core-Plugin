@@ -410,6 +410,43 @@ class SyncClient:
             return None
         return sync_outbox.enqueue(self.db, table, "insert", {"row": dict(row)})
 
+    def upsert_row_wait(
+        self,
+        table: str,
+        row: Dict[str, Any],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """同步向中心 upsert 一行并等待响应（供进退服时长上报等需立刻落中心的场景）。"""
+        if not self.is_running() or table not in self.enabled_tables or not row:
+            return False
+        table_enum = TABLE_TO_ENUM.get(table)
+        if table_enum is None:
+            return False
+        try:
+            msg = build_data_request(
+                SyncMessageType.INSERT_REQUEST,
+                table_enum,
+                dict(row),
+            )
+            msg_type, data = self._request_response(
+                msg,
+                expect_types={
+                    SyncMessageType.INSERT_RESPONSE,
+                    SyncMessageType.ERROR_RESPONSE,
+                },
+                timeout=timeout if timeout is not None else 5.0,
+            )
+            if msg_type == SyncMessageType.ERROR_RESPONSE:
+                self._log(
+                    "warning",
+                    f"upsert_row_wait {table} error response: {data.get('error', '')}",
+                )
+                return False
+            return bool(data.get("success"))
+        except Exception as e:
+            self._log("warning", f"upsert_row_wait {table} error: {e}")
+            return False
+
     def _close_socket(self) -> None:
         with self._socket_lock:
             sock = self._socket

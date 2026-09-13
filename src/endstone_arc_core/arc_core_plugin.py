@@ -1201,7 +1201,8 @@ class ARCCorePlugin(Plugin):
             ),
             delay=2,
         )
-        self.run_player_task(player, self._record_player_join_playtime, delay=4)
+        # 尽早上报/记账，便于 QQ 播报向主服拉到最新次数
+        self.run_player_task(player, self._record_player_join_playtime, delay=1)
         self.run_player_task(player, _join_hints, delay=6)
         self.run_player_task(player, _join_sky_eye, delay=8)
         self.run_player_task(player, _join_sidebar, delay=join_delay_ticks)
@@ -4145,10 +4146,12 @@ class ARCCorePlugin(Plugin):
         return getattr(self, "_sync_consumer_mode", "none") == "client"
 
     def _should_track_playtime_locally(self) -> bool:
-        """仅主服/未开同步的单机统计进服次数与时长；从服不统计。"""
+        """主服/单机本地记账；从服只上报中心并缓存展示。"""
         return not self._is_sync_consumer_client()
 
-    def _pull_basic_info_from_hub(self, xuid: str) -> Optional[Dict[str, Any]]:
+    def _pull_basic_info_from_hub(
+        self, xuid: str, timeout: float = 5.0
+    ) -> Optional[Dict[str, Any]]:
         """从服向同步中心按 XUID 拉一行 player_basic_info；失败返回 None。"""
         client = getattr(self, "sync_client", None)
         if client is None or not getattr(client, "is_running", lambda: False)():
@@ -4160,11 +4163,46 @@ class ARCCorePlugin(Plugin):
                 "player_basic_info",
                 "xuid = ?",
                 [str(xuid)],
-                timeout=5.0,
+                timeout=timeout,
             )
         except Exception as e:
             self._safe_log("warning", f"[ARC Core]Pull basic info from hub error: {e}")
             return None
+
+    def _cache_basic_info_row_locally(self, row: Dict[str, Any]) -> None:
+        """从服把中心权威行写入本地缓存（抑制上行，避免回推脏数据）。"""
+        if not row or not str(row.get("xuid") or "").strip():
+            return
+        try:
+            with self.database_manager.suppress_write_notify():
+                self.database_manager.upsert("player_basic_info", dict(row))
+        except Exception as e:
+            self._safe_log(
+                "warning", f"[ARC Core]Cache basic info locally error: {e}"
+            )
+
+    def _refresh_basic_info_from_hub(
+        self, xuid: str, timeout: float = 2.0
+    ) -> Optional[Dict[str, Any]]:
+        """从服展示/查询前向中心拉取该玩家进度并刷新本地缓存。"""
+        remote = self._pull_basic_info_from_hub(xuid, timeout=timeout)
+        if not remote or str(remote.get("xuid") or "") != str(xuid):
+            return None
+        self._cache_basic_info_row_locally(remote)
+        return dict(remote)
+
+    def _hub_upsert_basic_info_row(self, row: Dict[str, Any], timeout: float = 5.0) -> bool:
+        """从服把整行 player_basic_info 同步 upsert 到中心。"""
+        client = getattr(self, "sync_client", None)
+        if client is None or not getattr(client, "is_running", lambda: False)():
+            return False
+        if "player_basic_info" not in getattr(client, "enabled_tables", set()):
+            return False
+        try:
+            return bool(client.upsert_row_wait("player_basic_info", dict(row), timeout=timeout))
+        except Exception as e:
+            self._safe_log("warning", f"[ARC Core]Hub upsert basic info error: {e}")
+            return False
 
     def ensure_player_data_initialized(self, player: Player) -> tuple[bool, bool]:
         """
@@ -4187,10 +4225,7 @@ class ARCCorePlugin(Plugin):
                 remote = self._pull_basic_info_from_hub(player_xuid)
                 if remote and str(remote.get("xuid") or "") == player_xuid:
                     try:
-                        with self.database_manager.suppress_write_notify():
-                            self.database_manager.upsert(
-                                "player_basic_info", dict(remote)
-                            )
+                        self._cache_basic_info_row_locally(remote)
                         basic_info = self.database_manager.query_one(
                             "SELECT xuid, uuid FROM player_basic_info WHERE xuid = ?",
                             (player_xuid,),
@@ -16297,9 +16332,14 @@ class ARCCorePlugin(Plugin):
             self.logger.error(f"[ARC Core]Notify qqsync error: {e}")
 
     def _record_player_join_playtime(self, player) -> None:
-        """主服/单机：session_count +1 并开始计时。从服不统计，读同步中心数据。"""
-        if not self._should_track_playtime_locally():
-            return
+        """进服次数 +1 并开始计时。主服本地写库；从服上报中心后只缓存展示。"""
+        if self._should_track_playtime_locally():
+            self._record_player_join_playtime_local(player)
+        else:
+            self._report_player_join_playtime_to_hub(player)
+
+    def _record_player_join_playtime_local(self, player) -> None:
+        """主服/单机：session_count +1 并开始计时。"""
         try:
             import time as _time
             from datetime import datetime as _dt
@@ -16326,12 +16366,59 @@ class ARCCorePlugin(Plugin):
             if self.logger:
                 self.logger.error(f"[ARC Core] record join playtime error: {e}")
 
+    def _report_player_join_playtime_to_hub(self, player) -> None:
+        """从服：向主服上报进服，由中心累加 session_count；本地只缓存。"""
+        try:
+            import time as _time
+            from datetime import datetime as _dt
+            name = getattr(player, "name", "") or ""
+            xuid = str(getattr(player, "xuid", "") or "")
+            if not name or not xuid:
+                return
+            now_iso = _dt.now().isoformat(timespec="seconds")
+            remote = self._pull_basic_info_from_hub(xuid, timeout=5.0)
+            if remote and str(remote.get("xuid") or "") == xuid:
+                row = dict(remote)
+            else:
+                row = {
+                    "uuid": str(getattr(player, "unique_id", "") or ""),
+                    "xuid": xuid,
+                    "name": name,
+                    "password": None,
+                    "inviter_xuid": None,
+                    "pending_invite_reward_times": 0,
+                    "default_title_auto_equipped": 0,
+                    "total_playtime": 0,
+                    "session_count": 0,
+                }
+            row["name"] = name
+            row["session_count"] = int(row.get("session_count") or 0) + 1
+            row["last_join_time"] = now_iso
+            if not self._hub_upsert_basic_info_row(row, timeout=5.0):
+                self._safe_log(
+                    "warning",
+                    f"[ARC Core]Report join playtime to hub failed for {name}",
+                )
+                return
+            self._play_session_start[xuid] = int(_time.time())
+            self._cache_basic_info_row_locally(row)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"[ARC Core] report join playtime error: {e}")
+
     def _record_player_quit_playtime(
         self, player=None, *, xuid: str = "", name: str = ""
     ) -> None:
-        """主服/单机：把本次会话秒数累入 total_playtime。从服不统计。"""
-        if not self._should_track_playtime_locally():
-            return
+        """退服结算时长。主服本地写库；从服上报中心后只缓存。"""
+        if self._should_track_playtime_locally():
+            self._record_player_quit_playtime_local(player=player, xuid=xuid, name=name)
+        else:
+            self._report_player_quit_playtime_to_hub(player=player, xuid=xuid, name=name)
+
+    def _record_player_quit_playtime_local(
+        self, player=None, *, xuid: str = "", name: str = ""
+    ) -> None:
+        """主服/单机：把本次会话秒数累入 total_playtime。"""
         try:
             import time as _time
             from datetime import datetime as _dt
@@ -16361,6 +16448,49 @@ class ARCCorePlugin(Plugin):
         except Exception as e:
             if self.logger:
                 self.logger.error(f"[ARC Core] record quit playtime error: {e}")
+
+    def _report_player_quit_playtime_to_hub(
+        self, player=None, *, xuid: str = "", name: str = ""
+    ) -> None:
+        """从服：向主服上报退服，由中心累加 total_playtime；本地只缓存。"""
+        try:
+            import time as _time
+            from datetime import datetime as _dt
+            if player is not None:
+                name = getattr(player, "name", "") or name
+                xuid = str(getattr(player, "xuid", "") or "") or xuid
+            if not xuid:
+                return
+            started = self._play_session_start.pop(xuid, None)
+            if started is None and name:
+                started = self._play_session_start.pop(name, None)
+            now_iso = _dt.now().isoformat(timespec="seconds")
+            delta = max(0, int(_time.time()) - int(started)) if started is not None else 0
+            remote = self._pull_basic_info_from_hub(xuid, timeout=5.0)
+            if remote and str(remote.get("xuid") or "") == xuid:
+                row = dict(remote)
+            else:
+                local = self.database_manager.query_one(
+                    "SELECT * FROM player_basic_info WHERE xuid = ?",
+                    (xuid,),
+                )
+                if not local:
+                    return
+                row = dict(local)
+            if name:
+                row["name"] = name
+            row["total_playtime"] = int(row.get("total_playtime") or 0) + delta
+            row["last_quit_time"] = now_iso
+            if not self._hub_upsert_basic_info_row(row, timeout=5.0):
+                self._safe_log(
+                    "warning",
+                    f"[ARC Core]Report quit playtime to hub failed for {name or xuid}",
+                )
+                return
+            self._cache_basic_info_row_locally(row)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"[ARC Core] report quit playtime error: {e}")
 
     def _settle_all_online_playtime(self) -> None:
         """Settle timers for all online players (plugin disable / shutdown)."""
@@ -16394,6 +16524,9 @@ class ARCCorePlugin(Plugin):
             resolved = self._api_resolve_player_xuid(raw_player_name, xuid)
             if not resolved:
                 return empty
+            # 从服展示以主服为准：先拉中心再读本地缓存
+            if self._is_sync_consumer_client():
+                self._refresh_basic_info_from_hub(resolved, timeout=2.0)
             row = self.database_manager.query_one(
                 "SELECT * FROM player_basic_info WHERE xuid = ?",
                 (resolved,),

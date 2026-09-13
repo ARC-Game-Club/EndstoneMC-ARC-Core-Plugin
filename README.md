@@ -3,7 +3,7 @@
 # EndStone ARC Core Plugin / EndStone弧光核心
 
 [![Codacy Grade](https://app.codacy.com/project/badge/Grade/2f830615baf347258558dcc2a5ab85a1)](https://app.codacy.com/gh/DEVILENMO/EndstoneMC-ARC-Core-Plugin/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
-[![Version](https://img.shields.io/badge/version-v0.9.60-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)
+[![Version](https://img.shields.io/badge/version-v0.9.63-blue)](https://github.com/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)
 [![Python](https://img.shields.io/badge/python-3.13+-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![EndStone API](https://img.shields.io/badge/EndStone_API-0.7+-black)](https://github.com/EndstoneMC/endstone)
 [![License](https://img.shields.io/github/license/ARC-Minecraft/EndstoneMC-ARC-Core-Plugin)](LICENSE)
@@ -19,7 +19,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 
 - **作者**: DEVILENMO
 - **邮箱**: DEVILENMO@gmail.com
-- **版本**: 0.9.60
+- **版本**: 0.9.63
 - **API 版本**: 0.7+
 - **推荐 Python 版本**: 3.13
 
@@ -43,6 +43,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - **进服自动弹出主菜单**：玩家加入服务器后约 **1 秒**（20 ticks）会 **自动弹出 ARC 主菜单一次**，**无需配置**；可直接 **关闭** 表单继续游玩，亦可随时再输入 **`/arc`** 打开。此项 **不是**「强制登录」——浏览菜单不设密码门槛；敏感操作仍见下文「敏感操作密码验证」。
 - **按钮优先级排序（v0.9.48）**：所有主菜单按钮带优先级，**数字越小越靠前（0 最高）**；同优先级按按钮文本排序。核心内置：每日签到未签到 **0**、已签到 **99**；新手引导 **3** → 传送 **4** → 领地 **5** → 银行 **6** → 公会 **7** → 工具 **8** → OP 面板 **50**。
 - **外部插件自注册**：股票 / 按钮商店 / 枪战 / 别踩白块 / PvP KD / UShop 等不再由核心硬编码检测，应在各自 `on_enable` 调用 `api_register_main_menu_button`（建议 priority≈6）；`on_disable` 时 `api_unregister_main_menu_button`。DMZ 等本仓库外插件同样需自行注册。
+- **按钮图标（v0.9.60+）**：主菜单与各核心面板按钮带 **Minecraft 像素风图标**，贴图由客户端资源包 **弧光核心RP** 提供（`textures/arc_core/`）。外部插件注册时传 `icon="textures/arc_core/xxx.png"` 即可自带图标（v0.9.63 起），**不传则显示 ARC logo 兜底图**；客户端未装资源包时 Bedrock 自动不显示图标，不影响使用。配置 **`UI_ICONS_ENABLED`**（缺省 `True`）可整体关闭图标（OP 配置面板「通用」可改）。
 - **`/arc land`**、**`/arc tp`**、**`/arc bank`**、**`/arc guild`** 分别直接打开 **领地菜单**、**传送菜单**、**银行菜单**、**公会菜单**（若从控制台/命令方块执行，会按 **命令发送者名称** 解析在线玩家，与 `/connecttoserver` 相同机制，便于命令方块代为弹出表单）。进入菜单后，**转账、创建/管理领地、公会创建等敏感操作**仍会按需弹出密码验证（未设密会先引导设密），详见「玩家管理系统」。
 
 ### 👤 玩家管理系统
@@ -728,7 +729,7 @@ arc.api_sidebar_set_values(
 | `api_get_player_name_by_xuid` | `xuid`，`with_title=False` | `str`：找不到为 `""`；`with_title=True` 时为公会/头衔展示名 |
 | `api_get_player_playtime` | `raw_player_name=""`，`xuid=""` | `dict`：`session_count`，`total_playtime`（秒，含当前会话），`is_online`，`last_join_time`，`last_quit_time`，`xuid`；找不到时时长为 0 |
 | `api_get_newbie_guide_text` | 无 | `str`：`newbie_welcome.txt` 全文；失败为 `""` |
-| `api_register_main_menu_button` | `button_id`，`text`，`on_click`，`priority=6` | `bool`：向 `/arc` 主菜单注册按钮；`priority` 越小越靠前；同优先级按 `text` 排序；同 id 覆盖 |
+| `api_register_main_menu_button` | `button_id`，`text`，`on_click`，`priority=6`，`icon=None` | `bool`：向 `/arc` 主菜单注册按钮；`priority` 越小越靠前；同优先级按 `text` 排序；同 id 覆盖；`icon` 为弧光核心RP 内贴图路径（`textures/arc_core/xxx.png`，带 `.png`），缺省显示 ARC logo 兜底图 |
 | `api_unregister_main_menu_button` | `button_id` | `bool`：注销已注册按钮 |
 | `api_register_chat_prefix` | `prefix_name`，`priority=0` | `bool`：注册聊天/展示名前缀槽位；`priority` 越小越靠前（最低 0）；同名覆盖。内置 `guild=2`、`title=3` |
 | `api_set_player_chat_prefix` | `prefix_name`，`text`，`player_name=""`，`xuid=""` | `bool`：设置玩家该前缀的展示文本（可含 § 颜色码）；`text` 为空则清除；须已注册；不可改内置 `guild`/`title`；在线则刷新 `name_tag` |
@@ -743,6 +744,7 @@ if arc and hasattr(arc, "api_register_main_menu_button"):
         "我的功能",
         on_click=self.show_my_panel,  # callable(player)
         priority=6,
+        icon="textures/arc_core/my_icon.png",  # 可选：弧光核心RP 内贴图路径；缺省显示 ARC logo 兜底图
     )
 ```
 
@@ -816,10 +818,42 @@ if arc and hasattr(arc, "api_register_chat_prefix"):
 
 ## 📋 近期更新日志
 
-### v0.9.60（当前版本）
+### v0.9.63（当前版本）
 
+- ✅ **外部插件按钮图标改由各插件自带**：`api_register_main_menu_button` / `_put_main_menu_button` 的 `icon` 参数由各插件注册时传入（弧光核心RP 贴图路径，如 `textures/arc_core/guild.png`）；核心移除 `BUTTON_ICONS` 集中映射
+- ✅ 已适配自带图标：公会 / 按钮商店 / 木牌商店 / 别踩白块 / 异能与职业 / PvP KD 排行榜 / 枪战游戏 / 证券交易所 / UShop / 属性管理器（仅 OP 可见）
+
+### v0.9.62
+
+- ✅ **主菜单按钮图标三级回退**：按钮自带 `icon` → `button_id` 集中映射 → ARC logo 兜底图 `default.png`
+
+### v0.9.61
+
+- ✅ 版本号顺延：修复表单图标功能与「从服上报」功能占用的 v0.9.60 撞号
+
+### v0.9.60
+
+- ✅ **核心表单按钮接入自定义像素图标**：新增 `ui_icons` 路径常量模块；`/arc` 主菜单与核心面板 37 个按钮带图标；`_put_main_menu_button` / `api_register_main_menu_button` 新增可选 `icon` 参数（支持按玩家计算的 callable）；贴图由客户端资源包「弧光核心RP」提供（`textures/arc_core/`），缺失时 Bedrock 自动不显示图标
+- ✅ **`UI_ICONS_ENABLED` 开关**（缺省 `True`）：关闭后全部表单按钮降级为无图标；OP 配置面板「通用」可改
 - ✅ **从服时长/次数以主服为准**：从服进退服向同步中心上报该玩家 `session_count`/`total_playtime`，本地只缓存；`api_get_player_playtime` 展示前先向主服拉取
 - ✅ **进服记账提前到 delay=1**，便于 QQ 播报读到最新次数
+
+### v0.9.59
+
+- ✅ **修复全新服务器启动崩溃**：空 `core_setting.yml` 首启播种 `DATABASE_PATH` 默认值并兜底
+- ✅ 从服进退服向主服上报时长/次数（首版）
+
+### v0.9.58
+
+- ✅ **修复 `/sidebar`、`/sb lock` 重复枚举注册**：两条 usage 合并为可选参数 `[page: str]`
+
+### v0.9.57
+
+- ✅ **杀怪奖励拆出至独立插件 `arc_hunter`（猎魔人）**：贡献点直连 `arc_guild`
+
+### v0.9.56
+
+- ✅ **命令/TPA 弹表单前 `close_form`**；传送倒计时受伤自动打断
 
 ### v0.9.55
 
@@ -828,340 +862,6 @@ if arc and hasattr(arc, "api_register_chat_prefix"):
 ### v0.9.54
 
 - ✅ **简化 TPA 倒计时**：去掉 `run_two_player_task`；目标玩家 xuid/name 存进 `run_player_task` 闭包，到期再解析是否仍在线
-
-### v0.9.53
-
-- ✅ **紧急修复传送/进服**：补回拆公会时误删的 `run_player_task` / `run_two_player_task`（传送倒计时、进服延迟任务依赖）
-
-### v0.9.52
-
-- ✅ **修复**：补回被误删的 `_api_resolve_player_xuid`（`api_get_player_playtime` 等 API）
-- ✅ **修复**：`player_activity_stats` 迁移前先判断旧表是否存在，避免启动时刷 `no such table: player_achievement_stats`
-
-### v0.9.51
-
-- ✅ **前缀全注册制**：核心内置仅 `title=3`；`guild` 槽由 `arc_guild` 注册（priority=2），文本为公会名
-- ✅ **前缀可独立显隐**：`api_set_player_chat_prefix(..., visible=)` 与 `api_set_player_chat_prefix_visible`；隐藏时保留原文（例：倒地显示 `[已倒地]`，复活仅隐藏）
-
-### v0.9.50
-
-- ✅ **插件化跨服同步 API（协议 v4）**：其它插件可 `api_sync_register_namespace` 注册自有表，业务数据仍存各自插件库；中心落 `psync_*` 物理表；从服经 `on_apply` 回写
-- ✅ **公会拆出至 `arc_guild`**：核心删除内置公会 UI/API/`GuildSystem`；领地公会判定、击杀/签到贡献、聊天前缀改为软依赖（查失败一律视为无公会、不放行）
-- ✅ **领地待购面板**：非 OP 不显示「创建公共领地」按钮也不提示；有 `arc_guild` 且为会长/管理者时才出现「创建公会领地」
-- ✅ **时长/次数主服权威**：主服本地累加；从服进退服上报中心，展示前 PULL 主服进度（本地仅缓存）
-
-### v0.9.49
-
-- ✅ **聊天/展示名前缀注册制**：按 priority 升序拼接（越小越靠前，最低 0）；内置公会 `guild=2`、头衔 `title=3`；新增 `api_register_chat_prefix` / `api_set_player_chat_prefix` 供其它插件注册槽位并设置玩家前缀文本
-
-### v0.9.48
-
-- ✅ **主菜单按钮优先级与外部注册 API**：内置按钮硬编码优先级（签到 0/99，其余从 3 起）；同优先级按文本排序；新增 `api_register_main_menu_button` / `api_unregister_main_menu_button`；移除核心对股票/商店/枪战/DTWT/PvP KD/DMZ 等的硬编码入口，改由各插件自行注册
-- ✅ **游戏内死亡播报开关**：新增 `ENABLE_DEATH_BROADCAST`（默认 `True`），可在 OP 配置面板「通用」中关闭；与群聊 `QQ_DEATH_BROADCAST_MODE` 独立
-
-### v0.9.47
-
-- ✅ **自杀改回单次 `/kill`**：不再循环抽血；杀不死再另说
-
-### v0.9.46
-
-- ✅ **对接 DMZ**：主菜单在检测到 `dmz` 插件时显示「开放世界PVE搜打撤模式」，打开 `/dmz` 菜单（v0.9.48 起改为 DMZ 插件自行 `api_register_main_menu_button`）
-- ✅ **自杀曾改为多次抽血+kill**（v0.9.47 已改回单次 kill）
-
-### v0.9.42
-
-- ✅ **移除共享文件跨服同步**：删除 `*_DATABASE_PATH` 配置与 `legacy_recovery` 一次性导入；跨服仅支持 SyncServer + SyncClient 网络后端
-
-### v0.9.41
-
-- ✅ **传送倒计时改用屏幕 title**：Home / Warp / TPA / 死亡回归 / 随机传送倒计时改为屏幕中央大数字 + 字幕提示，不再刷聊天栏
-
-### v0.9.40
-
-- ✅ **修复同步主线程假死**：关服侧边栏不再写失效 Player
-
-### v0.9.38
-
-- ✅ **修复定时任务 purecall 崩服**：新增 `run_player_task` / `run_two_player_task` / `_resolve_online_player`；传送倒计时（45 tick）、进服延迟任务、领地边界粒子分批任务均改为闭包只存 xuid/name、回调时重取在线玩家；玩家退出时取消未完成的粒子任务
-
-### v0.9.37
-
-- ✅ **条件头衔稀有度修正**：首富等自动授予头衔按定义取最高稀有度（首富为「传奇」）；同持有者迁移时同步升级佩戴与解锁记录
-
-### v0.9.36
-
-- ✅ **生物显示名翻译修复**：死亡播报等处 `minecraft:skeleton` 类类型 ID 可正确解析为中文；`entity.ns:id.name` 与 `entity.ns.id.name` / `ns:id` 互通查找
-- ✅ **补全 entity_display_name.txt**：原版与常见模组双格式条目（`entity.*.*.name` + `ns:id`），避免空键挡住翻译
-
-### v0.9.35
-
-- ✅ **迎新文案/指令改内存缓存**：`newbie_welcome.txt`、`newbie_commands.txt` 启动与 OP 重载时读入内存；进服欢迎、新手引导面板、API 不再每次读盘。公告 `broadcast.txt` 原本已是内存轮播。
-
-### v0.9.34
-
-- ✅ **主线程减负**：侧边栏调度改为每 5 tick，到期玩家小顶堆取代全员扫描；金钱/头衔/公会改后台缓存
-- ✅ **天眼异步落库**：事件只入内存队列，SQLite 由后台线程写入；主手物品按玩家缓存，避免反复 `item_in_main_hand`
-- ✅ **活动统计批量写库**：方块破坏/放置先内存累加，定时刷盘
-- ✅ **领地 chunk LRU 缓存**：`get_land_at_pos` / 爆炸判定复用区块结果；领地粒子边界分 tick 发送
-
-### v0.9.33
-
-- ✅ **统一领地权限检查** `check_land_permission`：破坏/放置/方块交互/实体交互/攻击/展示框/爆炸共用；`ENABLE_LAND_SYSTEM=False` 或坐标无领地时直接跳过领地部分
-- ✅ **领地系统关闭时**不再做爆炸拦截、生物生成拦截、仅领地可放置方块等领地相关判定
-
-### v0.9.32
-
-- ✅ **侧边栏进服 tick 错峰**：记录玩家进服 tick，调度每 1 tick 仅刷新到期玩家，自然分散负载；单人周期仍为 `SIDEBAR_REFRESH_TICKS`
-- ✅ **领地系统总开关**：新增 `ENABLE_LAND_SYSTEM`；关闭时不启位置追踪线程（无进出领地提示），OP 面板可配
-
-### v0.9.31
-
-- ✅ **侧边栏键值不再即时重绘**：`set_value` / `set_values` 恢复为只写缓存，由定时 tick 按 `SIDEBAR_REFRESH_TICKS` 渲染
-
-### v0.9.30
-
-- ✅ **修复侧边栏数值延迟十几秒才更新**：分片桶数与调度周期叠乘导致单人刷新周期被平方；调度固定每 10 tick，桶数 = refresh_ticks/10
-- ✅ **刷新周期可配 1 秒**：移除 `SIDEBAR_REFRESH_TICKS=20` 被静默改回 60 的限制；OP 面板改配置后热重载即生效
-
-### v0.9.29
-
-- ✅ **侧边栏纯定时刷新**：去掉进出服、金钱变动、插件 `set_value` 的事件重绘；约 3 秒 tick 按 xuid 分批渲染，降低单 tick 峰值；`/sidebar on|off|next|prev|lock` 仍即时响应
-- ✅ **进服/离服减负**：`on_player_join` 头衔、时长、邀请提示、天眼、侧边栏分帧延迟执行；离服天眼与时长结算延后 1 tick，避免同帧阻塞主线程
-
-### v0.9.28
-
-- ✅ **天眼查询增强**：玩家名默认模糊匹配；`action` 支持 `death`/`pvp`/`pve`/`combat` 等别名与 PvP 细分；可不传玩家名按事件类型查全服；展示区分 PvP 攻击/死亡与攻击生物
-
-### v0.9.27
-
-- ✅ **PvP KD 排行榜插件适配**：检测到 `arc_pvp_kd` 时在主菜单显示「PvP KD 排行榜」入口，委托 `/kd` 打开玩家个人榜单 Form（原 `arc_hunter` / `/hunter` 已弃用）
-
-### v0.9.26
-
-- ✅ **修复侧边栏崩溃服务器**：`Objective.setDisplay` 改为每个 objective 只调一次；标题变化改 `display_name` 不再 `unregister` 重建；看板对象全程强引用，仅下线释放；进服延迟 `SIDEBAR_JOIN_DELAY_TICKS`（默认 40）后再写显示槽
-
-### v0.9.25
-
-- ✅ **侧边栏事件驱动刷新**：默认去掉生命/饱食；`SIDEBAR_REFRESH_TICKS` 默认 60（约 3 秒）只刷时间/TPS/延迟；金钱写库成功、进出服更新在线、插件 `set_value` 时触发刷新（旧配置 20 自动迁到 60）
-
-### v0.9.24
-
-- ✅ **侧边栏 TPS/延迟改为 3 秒取样**：去掉延迟 10ms 量化；TPS、MSPT、ping 每 3 秒取一次，其它行仍按 `SIDEBAR_REFRESH_TICKS` 刷新
-
-### v0.9.23
-
-- ✅ **修复文件同步模式下头衔迁移跨库删表**：`title_definitions` 等表重建改为 `rebuild_table_copy`（同连接事务 + VACUUM 备份），避免临时表落子服本地库、`DROP` 却打到主服共享库导致定义表丢失；启动前后校验表存在；对路由表 `DROP` 打 warning
-
-### v0.9.22
-
-- ✅ **备份库按 xuid 合并 `player_basic_info`**：主库缺表时先建表；按 xuid 插入/补空（密码、真实 uuid、名字），不覆盖已有密码；可从旧 `ARCCore.db` 备份恢复账号
-
-### v0.9.21
-
-- ✅ **修复跨库 DDL 误删 `player_basic_info`**：重建表时临时表不再落到默认库，避免共享库真表被 DROP；不可逆重建前 `VACUUM INTO` 备份，事务内行数校验失败则回滚
-- ✅ **一次性数据恢复**：主服配置 `LEGACY_IMPORT_DATABASE_PATHS` 可把旧共享库里的经济/头衔/公会导回，并用天眼/本服表重建 `player_basic_info`（无备份时密码需玩家重设）
-- ✅ **推荐纯网络同步**：主服开同步中心、子服 `ENABLE_SYNC_CLIENT`，清空四个 `*_DATABASE_PATH`；两种模式同时开时打 WARN
-
-### v0.9.20
-
-- ✅ **修复侧边栏导致客户端闪退**：不再每秒双缓冲销毁/重建 objective；改为复用稳定 `arc_sb` 并原地更新/清理行；假名截断至 40 字符；TPS/延迟按较低频率取样，降低发包频率
-
-### v0.9.19
-
-- ✅ **跨服排行改用 `once_op`**：`player_basic_info` 去掉镜像 `is_op`，改为粘性 `once_op`——任意服以 OP 登录过即置 1、卸任不回落；首富/金钱榜排除读此列。本服权限仍只看 `player_local_info.is_op`
-- ✅ **启动迁移**：旧 `basic.is_op=1` 与本服 `local.is_op=1` 自动写入 `once_op`，并重建表去掉旧列
-
-### v0.9.18
-
-- ✅ **修复全量同步超时**：连接阶段 TCP 粘包缓冲保留半包；等待 `FULL_SYNC_RESPONSE` 时消化穿插的 PUSH/心跳，避免帧错位后 `title_definitions` 等表 `timed out`
-- ✅ **全量同步期间不推送**：从服首心跳前 `accepts_push=False`，避免认证后立刻广播打断 request/response
-- ✅ **全量读库锁缩短**：同步中心 `_full_sync_lock` 只包住 SELECT，不再在 `sendall` 期间堵住其他从服；单表等待超时提到 120s
-
-### v0.9.17
-
-- ✅ **修复共享库 DDL 路由**：`CREATE` / `ALTER` / `DROP` / `PRAGMA table_info` 按表走 `PLAYER_*_DATABASE_PATH`，不再误改子服本地库；避免「提示已加 is_op 列、写共享库仍缺列」刷屏
-- ✅ **同步落库容忍列差**：`insert` / `upsert` / `update` 自动忽略目标表不存在的列（如远端多出的 `is_op`、误带的 `money`），避免网络同步协议服刷 `no column named …`
-- ✅ **本服表缺列补齐**：`player_local_info` 启动时补加 `is_op` 等遗漏列
-
-### v0.9.16
-
-- ✅ **连接即全面对账**：远程客户端每次连上同步中心，在全量拉取后自动把本地已启用同步表整表上行
-- ✅ **OP 一键对账**：配置面板点「跨服同步」即发起全面对账并显示状态，去掉多余确认步骤
-
-### v0.9.15
-
-- ✅ **猎手榜插件适配**：检测到 `arc_hunter` 时在主菜单显示「猎手榜」入口，委托 `/hunter` 打开玩家个人榜单 Form
-
-### v0.9.14
-
-- ✅ **跨服上行可靠投递**：子服本地写库先入 `sync_outbox`，断线不丢；重连先全量拉取再按序重放；协议升至 v3，数据操作响应带 `seq` ack（旧中心降级为发出即成功）
-- ✅ **修复数据操作响应类型**：`INSERT/UPDATE/DELETE_RESPONSE` 不再误用 `ERROR_RESPONSE`，客户端可确认上行成败
-- ✅ **条件头衔权威服**：新增 `CONDITIONAL_TITLE_AUTHORITY`；文件模式子服默认不再与主服双算首富
-- ✅ **首富排除 OP**：`player_basic_info` 增加跨服 `is_op` 镜像列，榜一查询不再依赖本服独有的 `player_local_info`
-- ✅ **OP 对账与状态**：核心设置 → 跨服同步 → 同步运行状态 / 立即对账（头衔）
-
-### v0.9.13
-
-- ✅ **核心库过时表清理**：启动时将旧 `player_achievement_stats` 的击杀/破坏/放置键迁入 `player_activity_stats` 后删除旧表；同步 DROP `richest_title_state`、`player_title_extra`、`player_achievement_unlocked`、`migration_history`（数据已迁至条件头衔表 / 成就插件本地库）
-
-### v0.9.12
-
-- ✅ **群聊死亡播报对接修复**：正确查找 `arc_qq_sync_astrbot`（Endstone 将 entry-point `-` 转为 `_`）；原始文本优先 `api_send_raw`
-- ✅ **群聊死亡播报模式**：新增配置 `QQ_DEATH_BROADCAST_MODE`（`off` / `pvp` / `all`，默认 `all`），可在 OP 配置面板「通用」中调整
-
-### v0.9.11
-
-- ✅ **玩家活动统计**：本服表 `player_activity_stats` 记录击杀（含玩家）、破坏/放置方块累计；只读 API 供成就等插件查询；旧 `player_achievement_stats` 的 `kill_*` 自动迁移
-
-### v0.9.10
-
-- ✅ **天眼战斗留档增强**：攻击记录伤害量、受击前/后血量、最大血量、伤害类型；PvP 附带被打方装备与附魔；死亡记录全身装备与背包摘要；主手物品格式含附魔（如 `netherite_sword{sharpness:5}x1`）
-
-### v0.9.9
-
-- ✅ **Toast 图标微调**：默认 Windows；公会 剑；账户 护甲；传送 智能体；小喇叭 阅读
-
-### v0.9.8
-
-- ✅ **Toast 标题加基岩字形图标**：金钱、领地、传送、账户、邀请、公会、Home、小喇叭 等；语言文件未含字形时也会自动补到标题最前
-
-### v0.9.7
-
-- ✅ **重要提示改用 toast**：金钱变动、转账、领地创建/买卖/移交/授权、传送请求与结果、注册、公会创建、邀请奖励、Home、小喇叭等走 `send_toast`；保护拦截、击杀奖励等仍用聊天栏
-- ✅ **`/tpa accept` / `/tpa deny`**：快速响应最近一条 TPA/TPHERE 请求（弹窗仍可用）
-- ✅ **头衔支持同名不同稀有度**：`title_definitions` / 解锁 / 佩戴以 `(title, rarity)` 为完整标识；`api_has_title_definition` / `api_unlock_title` 等 API 按名称+稀有度匹配
-
-### v0.9.6
-
-- ✅ **头衔解锁不再发奖**：`api_unlock_title` / `api_unlock_title_by_xuid` 只负责解锁与自动佩戴；金钱/物品改由成就等业务插件发放。新增 `api_has_title_definition`
-- ✅ **进出领地提示改用 tip**：进入/离开领地由 `send_popup` 改为 `send_tip`（屏幕下方快捷栏上方），避免挡视野
-
-### v0.9.5
-
-- ✅ **允许圈地开关**：新增本服独立配置 `ALLOW_LAND_CLAIM`（默认 `True`，不随主服同步）；关闭后隐藏「创建新领地」并拦截 `/land` 与新建确认，管理与调整已有领地范围不受影响
-
-### v0.9.4
-
-- ✅ **侧边栏灰橙配色**：重点色由 §b 改为 §6（橙金）；标题/TPS 等强调项同步
-
-### v0.9.3
-
-- ✅ **侧边栏主页面**：默认不再显示 MSPT，仅保留 TPS
-
-### v0.9.2
-
-- ✅ **侧边栏配色与排版**：§8/§7/§f/§b 四色约定；去掉加粗与空隙标题；主页顺序改为时间→性能→在线/延迟→生命/饱食→金钱；时间仅显示 `HH:MM`
-
-### v0.9.1
-
-- ✅ **侧边栏主页面**：新增 TPS / MSPT、在线人数上限、玩家延迟（`{tps}` `{mspt}` `{max_players}` `{ping}`）
-
-### v0.9.0
-
-- ✅ **侧边栏总控系统**：原生计分板多页面、默认 10 秒翻页、每玩家独立数据与开关偏好
-- ✅ **核心主页面**：现实时间、金钱、生命、饱食度、在线人数等；模板与标题可配置
-- ✅ **对外 API**：`api_sidebar_register_page` / `api_sidebar_set_value(s)` 等，供真实生存等插件注册页面并推送键值
-- ✅ **玩家命令**：`/sidebar`（`/sb`）开关、翻页、锁定、列表；OP 面板新增「侧边栏」配置分组
-
-### v0.8.22
-
-- ✅ **条件头衔（首富）**：抽出可复用迁移层；同分 `ORDER BY money DESC, xuid ASC` 防抖动；持有者不变绝不 revoke；易主时曾戴则回退其它最高稀有度头衔，新持有者无佩戴则自动戴上
-- ✅ **跨服仅主服计算首富**：同步从服 `refresh` no-op；主服在收到从服 `player_economy` 写入后刷新；解锁/佩戴仍走现有头衔同步
-
-### v0.8.21
-
-- ✅ **拦截生物生成作用范围**：新增 **`LAND_BLOCK_ACTOR_SPAWN_SCOPE`**（`public` 默认 / `all`）。`public` 仅公共领地且看各领地开关；`all` 时任意领地按全局黑/白名单拦截
-
-### v0.8.20
-
-- ✅ **爆炸保护保留伤害**：`BLOCK_ALL_EXPLOSIONS` 与领地禁止爆炸时，优先清空 `block_list`（不拆方块、保留实体伤害）；写回失败或仍非空则回退 `is_cancelled`，外层异常同样取消，避免保护失效
-
-### v0.8.19
-
-- ✅ **传送功能独立开关**：公共传送点 / Home / 随机传送 / 死亡点 / 玩家互传 / 跨服传送均可单独关闭（默认全开）；关闭后传送系统面板不显示对应按钮
-- ✅ **玩家互传改为下拉框**：发送 TPA/TPHERE 时用下拉框选择请求类型与目标玩家
-
-### v0.8.18
-
-- ✅ **公共领地拦截生物生成去掉全局 Off**：`PUBLIC_LAND_BLOCK_ACTOR_SPAWN_MODE` 仅保留 **whitelist / blacklist**（默认 whitelist；旧值 False/off 视为白名单）。每个公共领地可单独开启/关闭拦截，开启后按全局名单模式生效
-
-### v0.8.17
-
-- 主菜单商店：优先对接木牌商店 `/ss`（`arc_sign_shop`），无则回退按钮商店 `/bs`
-
-### v0.8.16
-
-- ✅ **天眼指令可读性**：查玩家时同时匹配 `target_name`（能看到天星代其执行的指令）；新增动作 `AgentCommand`（天星指令）；热重载后已在线玩家自动纳入追踪
-
-### v0.8.15
-
-- ✅ **热修进服崩服**：天眼仅在 `PlayerJoin` 完成后再追踪该玩家；加载期 `GameModeChange` 直接忽略（不再读 `location`）
-- ✅ `api_sky_eye_log(..., resolve_online=False)`：可不解析在线玩家、不读坐标
-
-### v0.8.14
-
-- ✅ **天眼全量留档**：玩家聊天、玩家指令、控制台/插件指令、游戏模式变更；动作标签 `PlayerChat` / `PlayerCommand` / `ConsoleCommand` / `GameModeChange` / `AiAgent`
-
-### v0.8.13
-
-- ✅ **地标 API**：`api_list_spawn_locations` / `api_list_public_lands` / `api_get_server_landmarks_text`，供弧光 Agent 回答出生点、公共传送点、功能区
-
-### v0.8.12
-
-- ✅ **天眼扩展**：银行变动、领地创建/删除、弧光传送、按钮商店（由 arc_button_shop 调用）、丢弃/拾取/切换主手/消耗物品、玩家传送事件
-- ✅ **公开 API**：`api_sky_eye_log()` 供其他插件写入天眼
-
-### v0.8.11
-
-- ✅ **OP 配置文件设置**：`core_setting.yml` 全部项可在 OP 面板按分类用 UI 修改。布尔/多选为下拉框；列表为动态按钮 +「增加新配置」，点进单条可删除
-
-### v0.8.10
-
-- ✅ **拦截生物生成：全局模式 + 领地开关**：`PUBLIC_LAND_BLOCK_ACTOR_SPAWN_MODE` 为 **False** 时各公共领地固定显示「不开启拦截」且无开关按钮；为 **blacklist** / **whitelist** 时每个领地可单独开启/关闭拦截。名单仍为 `PUBLIC_LAND_BLOCK_ACTOR_SPAWN_LIST`
-
-### v0.8.9
-
-- ✅ **公共领地拦截生物生成改为模式**：OP 设置由开关改为 **Off / 黑名单 / 白名单**（默认 Off）。配置 **`PUBLIC_LAND_BLOCK_ACTOR_SPAWN_LIST`**（逗号分隔实体 ID）：白名单=名单上的不拦截，黑名单=只拦截名单上的。旧库 `block_actor_spawn=1` 迁移为白名单（名单为空则仍拦截全部）
-
-### v0.8.8
-
-- ✅ **天眼改独立 SQLite**：事件写入 `plugins/ARCCore/sky_eye/skyeye.db`，按 `SKY_EYE_MAX_RETENTION_DAYS` 滚动删除；每条记录带领地内外、领地名/主人，并记录玩家攻击与死亡击杀者
-- ✅ **天星查询接口**：`api_sky_eye_query` / `api_sky_eye_query_text` / `api_sky_eye_player_now`；AstrBot 工具 `mc_skyeye_player`、`mc_skyeye_combat`、`mc_skyeye_location`（仅管理员）
-
-### v0.8.7
-
-- ✅ **OP 圈地冲突面板**：选区与现有领地重叠时，普通玩家仍直接拦住；OP 可进入待购面板创建「允许私人/公会覆盖」的公共领地，并默认勾选允许覆盖
-
-### v0.8.6
-
-- ✅ **进服时长中断修复**：语言文件末尾若有空的 `PLAYER_JOIN_MESSAGE=`，会覆盖文案并使 `broadcast_message` 抛错，游戏时长/进服次数因此记不上。空文案改为跳过；加载语言时也不再用空键覆盖已有翻译
-
-### v0.8.5
-
-- ✅ **公共领地拦截生物生成修复**：原先仅取消 EndStone `Mob` 类型，模组生物常被包成普通 Actor 因而漏拦。开启 `block_actor_spawn` 后改为取消该公共领地内**除玩家外的全部实体**生成
-- ✅ **跨服玩法配置以主服为准**：远程客户端按已开启的同步类别，从同步中心拉取并覆盖对应 `core_setting.yml` 项（初始金钱、公会升级消耗、签到存款、传送/圈地价格等）。主服改配置或重载后推送；从服本地修改这些键会被主服覆盖。共享文件模式不自动同步配置
-- ✅ **公会 API 补齐**：按公会 id / 玩家 xuid 查询与单独增减公共、私人贡献点（`api_get_player_guild_id`、`api_get_guild_info`、`api_get_guild_total_contribution`、`api_change_guild_total_contribution`、`api_get_member_guild_contribution`、`api_change_member_guild_contribution`、`api_list_guild_members`）
-- ✅ **其它系统对外 API**：经济 / 头衔 / 领地 / 传送 / 玩家解析统一支持 **xuid**；新增 `api_adjust_player_money`、财富排名、头衔列表与佩戴查询、玩家/公会领地、静默领地权限检查、坐标/Home/Warp 传送、`api_get_player_name_by_xuid` 等。旧签名保持兼容
-
-### v0.8.4
-
-- ✅ **成就系统拆出**：成就迁至独立插件 `endstone_arc_achievement`（`arc_achievement`）；核心仅转发菜单入口并提供头衔/发奖 API。关服时忽略同步套接字已关闭后的 `recv` 噪声
-
-### v0.8.2
-
-- ✅ **玩家表拆分**：跨服 **`player_basic_info`**（密码、邀请、**游戏时长 / 进服次数**）；本服 **`player_local_info`**（`is_op`、剩余免费领地格、**签到**）。启动自动迁移
-- ✅ **QQ 中继移除**：不再经 SyncServer 转发 QQ 事件 / 群聊下行（原 `QQ_RELAY_MODE` / `EVENT_FORWARD` 已移除）。群服互通由 AstrBot 弧光 EndStone 消息中枢 + QQ Sync 插件负责；死亡使用 `api_send_event("death", …)`，成就等可用 `custom`
-- ✅ **公共领地三级优先级**：`lands.public_priority`（1/2/3，**3 最高**，默认 1）。高优先级公共可覆盖低优先级；同级不可重叠。位置生效顺序：**私人/公会 > 公共(3>2>1)**；私人子领地仍先于父领地。创建公共领地时 OP 选择等级；OP 公共领地设置可改级（升高时校验冲突）
-- ✅ **公共领地拦截生物生成**：`block_actor_spawn`（默认关闭）；开启后经 `ActorSpawnEvent` 取消该公共领地内 `Mob`（不含玩家）生成
-- ✅ **传送点校验修复**：设置领地传送点改为按目标领地三维 AABB（含维度/Y）判定，不再用「脚下生效领地 ID」比较，避免嵌套私人地/高层公共覆盖时误报「不在领地内」
-- ✅ **领地外接 API**：`api_if_position_in_land` 适配三维 Y、维度规范化与多层生效；新增 **`api_resolve_land_at_position`**、**`api_list_lands_at_position`**。维度支持规范 ID（如 `minecraft:overworld`）及自定义维度
-- ✅ **跨维传送指令修复**：`/execute in` 对原版三维度使用短名（`overworld` / `nether` / `the_end`），去掉 `minecraft:`；自定义维度仍使用完整 `namespace:dimension_identifier`
-- ✅ **版本号方案**：历史版本号由 `0.0.x` 调整为 `0.x`（如原 `0.0.8.1` → `0.8.1`）
-
-### v0.8.1
-
-- ✅ **跨服数据同步**：游戏服 **远程客户端**（**`ENABLE_SYNC_CLIENT`**）与 **共享文件路径**（**`PLAYER_DATABASE_PATH`** 等）**互斥**；远程模式支持分项开关 **`SYNC_CLIENT_SYNC_PLAYER` / `_ECONOMY` / `_TITLE` / `_GUILD`**。新增 **`sync_client.py`**、**`sync_config.py`**；同步中心 **`ENABLE_SYNC_SERVER`** 可选开启。详见上文「跨服数据同步」
-- ✅ **爆炸监听修复**：修复 **`ActorExplodeEvent`** 在 **`BLOCK_ALL_EXPLOSIONS=False`** 时按领地保护的流程错误。改为用 **`block.x/y/z`** 直接取坐标；对需保留方块通过 **`get_block_at`** 重建 **`block_list`** 再写回；写回失败时回退为取消整次爆炸
 
 ### 计划中的功能
 - 🔄 更多语言包支持

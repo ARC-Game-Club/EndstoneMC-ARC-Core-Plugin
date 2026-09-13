@@ -101,6 +101,8 @@ BROADCAST_INTERVAL=120
 ENABLE_DEATH_BROADCAST=True
 # 群聊死亡播报：off=不播报 / pvp=仅播报PvP死亡 / all=全部播报（默认）
 QQ_DEATH_BROADCAST_MODE=all
+# 表单按钮图标（True/False，默认 True；需客户端安装「弧光核心RP」资源包，关闭后全部按钮无图标）
+UI_ICONS_ENABLED=True
 # 小喇叭每小时费用（玩家购买后每10分钟广播一次，按小时计费）
 SMALL_HORN_PRICE_PER_HOUR=60
 

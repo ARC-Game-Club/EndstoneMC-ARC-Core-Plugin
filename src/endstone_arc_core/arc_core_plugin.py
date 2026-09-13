@@ -4895,11 +4895,11 @@ class ARCCorePlugin(Plugin):
         arc_menu = ActionForm(
             title=self.language_manager.GetText('MAIN_MENU_TITLE'),
         )
-        for text, icon, bid, on_click in self._iter_main_menu_buttons_for_player(player):
-            # 三级回退：按钮自带 icon -> 按 button_id 映射外部插件图标 -> ARC logo 兜底
+        for text, icon, _bid, on_click in self._iter_main_menu_buttons_for_player(player):
+            # 按钮图标由各插件注册时自带（icon 参数）；未提供则回退 ARC logo 兜底
             arc_menu.add_button(
                 text,
-                icon=self._ui_icon(icon or ui_icons.get_for_button(bid)),
+                icon=self._ui_icon(icon or ui_icons.DEFAULT),
                 on_click=on_click,
             )
         arc_menu.on_close = None
@@ -5047,7 +5047,8 @@ class ARCCorePlugin(Plugin):
         icon=None,
     ) -> bool:
         """供其它插件注册 ARC 主菜单按钮。priority 越小越靠前（0 最高）；同优先级按文本排序。
-        icon 可选，为自定义资源包贴图路径（带 .png）；未提供则无图标。"""
+        icon 可选，为 弧光核心RP 内的贴图路径（带 .png，如 "textures/arc_core/guild.png"）；
+        未提供则使用 ARC logo 兜底图。"""
         try:
             return self._put_main_menu_button(
                 button_id,

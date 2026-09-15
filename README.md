@@ -139,18 +139,22 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 ### 🔌 外部插件集成（注册制）
 核心 **不硬编码检测任何外部插件**，主菜单的第三方入口一律由各插件 **自己注册**：插件在 `on_enable` 调用 `api_register_main_menu_button` 添加按钮（可带 `icon` 图标），`on_disable` 时调用 `api_unregister_main_menu_button` 注销。**安装即显示入口，未安装不显示**，核心侧无需任何配置。
 
-弧光系列已适配此机制的插件包括（部分列举）：
+已适配此机制的插件包括（按钮名为各插件注册时传入的文本）：
 
-| 插件 | 功能 | 主菜单入口 |
+| 插件 | 功能 | 主菜单按钮 |
 |------|------|-----------|
 | `arc_guild` | 公会系统 | 公会 |
-| `arc_achievement` | 成就系统 | 我的成就 / 成就管理 |
-| `arc_hunter` | 击杀奖励（猎魔人） | —（无菜单入口） |
-| UShop | 商店系统 | 商店 |
+| `arc_achievement` | 成就系统 | 我的成就 / 成就管理（核心检测到后转发 `/ach`、`/achop`） |
+| `arc_hunter` | 击杀奖励（猎魔人） | 无菜单入口 |
 | `arc_button_shop` | 玩家按钮商店 | 按钮商店 |
-| `up_and_down` | 证券交易 | 证券交易所 |
+| `arc_sign_shop` | 木牌商店 | 木牌商店 |
+| `up_and_down` | 证券交易所 | 证券交易所 |
 | `arc_pvp_kd` | PvP KD 排行榜 | PvP KD 排行榜（点击执行 `/kd` 单独弹榜） |
-| 枪战 / 别踩白块 / 异能与职业 / 木牌商店 等 | 各自玩法 | 各自按钮 |
+| `arc_shooter_game` | 枪战游戏 | 枪战游戏 |
+| `arc_dtwt` | 别踩白块小游戏 | 别踩白块小游戏 |
+| `arc_esper` | 异能与职业 | 序列异能 |
+| `arc_attribute_core` | 属性管理器 | 属性管理器（仅 OP 可见） |
+| UShop（第三方插件） | 商店系统 | 商店 |
 
 注册方式与参数详见「API 接口 → 主菜单按钮」。
 

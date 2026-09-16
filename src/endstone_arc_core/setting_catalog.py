@@ -104,6 +104,7 @@ SETTING_GROUPS: List[Dict[str, object]] = [
             _s("SYNC_CLIENT_SYNC_ECONOMY", "同步银行存款数据", "bool", choices=BOOL_CHOICES, restart=True),
             _s("SYNC_CLIENT_SYNC_TITLE", "同步头衔数据", "bool", choices=BOOL_CHOICES, restart=True),
             _s("SYNC_CLIENT_SYNC_GUILD", "同步公会数据", "bool", choices=BOOL_CHOICES, restart=True),
+            _s("SYNC_CLIENT_SYNC_MAIL", "同步邮箱数据", "bool", choices=BOOL_CHOICES, restart=True),
             _s(
                 "CONDITIONAL_TITLE_AUTHORITY",
                 "条件头衔权威服（[本服] 身份）",
@@ -262,6 +263,13 @@ SETTING_GROUPS: List[Dict[str, object]] = [
             _s("GUILD_UPGRADE_TO_LARGE_COST", "[全服] 升级大型消耗贡献", "int", placeholder="100000"),
             _s("GUILD_RENAME_COST", "[全服] 公会改名费用", "float", placeholder="0"),
             _s("GUILD_LAND_TELEPORT_CONTRIB_COST", "[本服] 公会领地传送贡献消耗", "int", placeholder="10"),
+        ],
+    },
+    {
+        "id": "mail",
+        "title": "邮箱",
+        "items": [
+            _s("MAIL_EXPIRE_DAYS", "[全服] 邮件保留天数（0 永不过期）", "float", placeholder="30"),
         ],
     },
     {

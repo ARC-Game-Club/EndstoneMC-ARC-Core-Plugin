@@ -17,6 +17,7 @@ from endstone.plugin import Plugin
 
 from endstone_arc_core.DatabaseManager import DatabaseManager
 from endstone_arc_core.Economy import Economy
+from endstone_arc_core.MailSystem import MailSystem
 from endstone_arc_core.LanguageManager import LanguageManager
 from endstone_arc_core.SettingManager import SettingManager
 from endstone_arc_core.TeleportSystem import TeleportSystem, generate_tp_command_to_position
@@ -65,8 +66,8 @@ class ARCCorePlugin(Plugin):
             "permissions": ["arc_core.command.op"],
         },
         "arc": {
-            "description": "ARC menu; subcommands: op, land, tp, bank, guild.",
-            "usages": ["/arc", "/arc op", "/arc land", "/arc tp", "/arc bank", "/arc guild"],
+            "description": "ARC menu; subcommands: op, land, tp, bank, guild, mail.",
+            "usages": ["/arc", "/arc op", "/arc land", "/arc tp", "/arc bank", "/arc guild", "/arc mail"],
             "permissions": ["arc_core.command.common"],
         },
         "suicide":
@@ -163,6 +164,7 @@ class ARCCorePlugin(Plugin):
         self._sync_consumer_mode = resolve_sync_consumer_mode(self.setting_manager)
 
         self.economy = Economy(self.database_manager, self.setting_manager)
+        self.mail_system = MailSystem(self.database_manager, self.setting_manager)
         self.teleport_system = TeleportSystem(self.database_manager, self.setting_manager)
         self.land_system = LandSystem(self.database_manager, self.setting_manager)
         self.title_system = TitleSystem(self.database_manager, self.setting_manager)
@@ -509,6 +511,10 @@ class ARCCorePlugin(Plugin):
         self.server.scheduler.run_task(self, self.send_small_horn_messages, delay=small_horn_period, period=small_horn_period)
         self.logger.info("[ARC Core]Small horn system started, interval: 600 seconds")
 
+        # 邮件过期清理：每 30 分钟一次
+        mail_purge_period = 30 * 60 * 20
+        self.server.scheduler.run_task(self, self._mail_purge_tick, delay=mail_purge_period, period=mail_purge_period)
+
         # 清道夫系统定时任务
         if self.enable_cleaner:
             cleaner_period = self.cleaner_interval * 20  # 转换为ticks
@@ -785,6 +791,9 @@ class ARCCorePlugin(Plugin):
                     return True
                 if head == "guild":
                     self.show_guild_main_menu(player)
+                    return True
+                if head == "mail":
+                    self.show_mailbox_panel(player)
                     return True
             self.show_main_menu(player)
             return True
@@ -1184,6 +1193,7 @@ class ARCCorePlugin(Plugin):
                 self.logger.error(
                     f"{ColorFormat.RED}[ARC Core]Check matured fixed deposits on join error: {str(e)}"
                 )
+            self._mail_join_notify(p)
 
         def _join_sky_eye(p):
             try:
@@ -3503,6 +3513,7 @@ class ARCCorePlugin(Plugin):
         self.economy.init_economy_table()
         self.economy.upgrade_player_economy_table_to_float()
         self.economy.init_fixed_deposit_table()
+        self.mail_system.init_mail_tables()
         self.land_system.init_land_tables()
         self.land_system.init_sub_land_table()
         self.teleport_system.init_teleport_tables()
@@ -4980,6 +4991,13 @@ class ARCCorePlugin(Plugin):
             priority=6,
             icon=ui_icons.BANK,
         )
+        self._put_main_menu_button(
+            "arc_core:mail",
+            text=lambda p: self._mail_menu_button_text(p),
+            on_click=self.show_mailbox_panel,
+            priority=7,
+            icon=ui_icons.MAIL,
+        )
         # 公会入口由 arc_guild 插件 api_register_main_menu_button 自行注册
         self._put_main_menu_button(
             "arc_core:tools",
@@ -5853,30 +5871,99 @@ class ARCCorePlugin(Plugin):
         if player is None:
             resolved = self._api_resolve_player_xuid(player_name, xuid)
             player = self._find_online_player_by_xuid(resolved) if resolved else None
-        if player is None or not items:
+        if player is None or not isinstance(items, list) or not items:
             return False
-        if not isinstance(items, list):
+        return bool(self._grant_items_to_player(player, items))
+
+    # ------------------------------------------------------------------ 邮件 API
+    def api_send_mail(
+        self,
+        title: str,
+        content: str = "",
+        player_name: str = "",
+        xuid: str = "",
+        items: Optional[List] = None,
+        money: float = 0.0,
+        sender_name: str = "系统",
+        expire_days: Optional[float] = None,
+    ) -> bool:
+        """给玩家发一封个人邮件（支持不在线玩家，按 xuid/名字落库）。
+
+        items 格式同 api_give_player_items：[{"item_name": id, "count": n}, ...]。
+        expire_days 缺省用配置 MAIL_EXPIRE_DAYS；<=0 表示永不过期。
+        """
+        resolved = self._api_resolve_player_xuid(player_name, xuid)
+        if not resolved:
             return False
-        any_ok = False
-        for it in items:
-            if not isinstance(it, dict):
-                continue
-            item_name = str(it.get("item_name") or it.get("id") or "").strip()
-            try:
-                count = int(it.get("count", 1))
-            except (TypeError, ValueError):
-                continue
-            if not item_name or count <= 0:
-                continue
-            try:
-                self.server.dispatch_command(
-                    self.server.command_sender,
-                    f"give {format_mc_command_player_name(player.name)} {item_name} {count}",
-                )
-                any_ok = True
-            except Exception:
-                pass
-        return any_ok
+        receiver_name = player_name or self.api_get_player_name_by_xuid(resolved)
+        mail_id = self.mail_system.send_mail(
+            receiver_xuid=resolved,
+            receiver_name=str(receiver_name or ""),
+            sender_name=sender_name,
+            title=title,
+            content=content,
+            items=items,
+            money=money,
+            expire_days=expire_days,
+        )
+        if not mail_id:
+            return False
+        online = self._find_online_player_by_xuid(resolved)
+        if online is not None:
+            self._notify_important(
+                online,
+                self.language_manager.GetText("MAIL_NEW_MAIL_NOTIFY").format(
+                    str(title or "").strip()
+                ),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+        return True
+
+    def api_send_global_mail(
+        self,
+        title: str,
+        content: str = "",
+        items: Optional[List] = None,
+        money: float = 0.0,
+        sender_name: str = "系统",
+        announce: bool = False,
+        expire_days: Optional[float] = None,
+    ) -> bool:
+        """发一封全服邮件（每名玩家各自领取附件）。
+
+        announce=True 时在本服聊天栏发全服通告（跨服场景各服可自行广播）。
+        """
+        mail_id = self.mail_system.send_global_mail(
+            sender_name=sender_name,
+            title=title,
+            content=content,
+            items=items,
+            money=money,
+            expire_days=expire_days,
+        )
+        if not mail_id:
+            return False
+        if announce:
+            if items or money > 0:
+                announce_key = "MAIL_GLOBAL_ANNOUNCE_ATTACH"
+            else:
+                announce_key = "MAIL_GLOBAL_ANNOUNCE"
+            self._broadcast_text(
+                self.language_manager.GetText(announce_key).format(str(title or "").strip())
+            )
+        return True
+
+    def api_count_player_mails(
+        self, player_name: str = "", xuid: str = "", unread_only: bool = False
+    ) -> int:
+        """统计玩家邮箱邮件数（含全服邮件）；unread_only=True 只数未读。"""
+        resolved = self._api_resolve_player_xuid(player_name, xuid)
+        if not resolved:
+            return 0
+        views = self.mail_system.list_mails_for_xuid(resolved, limit=500)
+        if unread_only:
+            return sum(1 for v in views if v["unread"])
+        return len(views)
 
     def api_get_newbie_guide_text(self) -> str:
         """供其他插件调用：返回新手引导文本全文（与内存中的 newbie_welcome.txt、主菜单新手引导一致）。"""
@@ -8978,6 +9065,561 @@ class ARCCorePlugin(Plugin):
                 return
         
         self.start_teleport_to_position_countdown(player, home_name, (home_info['x'], home_info['y'], home_info['z']), 'HOME', home_info['dimension'])
+
+    # ------------------------------------------------------------------
+    # 邮件系统（网游式邮箱：个人/全服邮件、附件物品+金币、全服通告、过期清理）
+    # ------------------------------------------------------------------
+
+    def _mail_menu_button_text(self, player: Player) -> str:
+        """主菜单邮箱按钮：有未读时在文本里带数量。"""
+        base = self.language_manager.GetText("MAIL_MENU_BUTTON") or "邮箱"
+        try:
+            unread = self.mail_system.count_unread(str(getattr(player, "xuid", "") or ""))
+        except Exception:
+            unread = 0
+        if unread > 0:
+            template = self.language_manager.GetText("MAIL_MENU_BUTTON_UNREAD")
+            return template.format(unread) if template else f"{base}（{unread} 条未读）"
+        return base
+
+    def _mail_purge_tick(self) -> None:
+        """定时清理过期邮件（附件随之作废）。"""
+        try:
+            self.mail_system.purge_expired()
+        except Exception as e:
+            self._safe_log("warning", f"[ARC Core]Mail purge error: {e}")
+
+    def _mail_join_notify(self, player: Player) -> None:
+        """进服未读邮件提醒（toast）。"""
+        try:
+            unread = self.mail_system.count_unread(str(getattr(player, "xuid", "") or ""))
+            if unread > 0:
+                self._notify_important(
+                    player,
+                    self.language_manager.GetText("MAIL_UNREAD_JOIN_NOTIFY").format(unread),
+                    title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+                )
+        except Exception as e:
+            self.logger.error(f"{ColorFormat.RED}[ARC Core]Mail join notify error: {str(e)}")
+
+    def show_mailbox_panel(self, player: Player):
+        """玩家邮箱：个人 + 全服邮件列表，未读/附件标记，一键领取。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        if not xuid:
+            self._send_text(player, self.language_manager.GetText("SYSTEM_ERROR"))
+            return
+        self._mail_purge_tick()
+        mails = self.mail_system.list_mails_for_xuid(xuid, limit=50)
+        unread = sum(1 for m in mails if m["unread"])
+        unclaimed = sum(1 for m in mails if m["unclaimed"])
+        content_template = (
+            self.language_manager.GetText("MAIL_BOX_CONTENT")
+            if mails
+            else self.language_manager.GetText("MAIL_BOX_EMPTY_CONTENT")
+        )
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_BOX_TITLE"),
+            content=content_template.format(unread, unclaimed),
+            on_close=None,
+        )
+        if unclaimed > 0:
+            panel.add_button(
+                self.language_manager.GetText("MAIL_CLAIM_ALL_BUTTON"),
+                icon=self._ui_icon(ui_icons.CLAIM_REWARD),
+                on_click=self._mail_claim_all,
+            )
+        tag_unread = self.language_manager.GetText("MAIL_TAG_UNREAD")
+        tag_attachment = self.language_manager.GetText("MAIL_TAG_ATTACHMENT")
+        tag_global = self.language_manager.GetText("MAIL_TAG_GLOBAL")
+        for m in mails:
+            prefix = ""
+            if m["unread"]:
+                prefix += tag_unread
+            if m["unclaimed"]:
+                prefix += tag_attachment
+            sender_label = tag_global if m["is_global"] else str(m.get("sender_name") or "")
+            title_text = str(m.get("title") or "").strip() or self.language_manager.GetText("MAIL_NO_TITLE")
+            button_text = f"{prefix}{title_text}"
+            if sender_label:
+                button_text += f"§7（{sender_label}）§r"
+            panel.add_button(
+                button_text,
+                on_click=lambda p, mid=str(m.get("mail_id")): self.show_mail_detail_panel(p, mid),
+            )
+        panel.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_main_menu,
+        )
+        player.send_form(panel)
+
+    def show_mail_detail_panel(self, player: Player, mail_id: str):
+        """邮件详情：正文 + 附件列表 + 领取/删除。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        row = self.mail_system.get_mail(mail_id)
+        if row is None or self.mail_system._is_expired_row(row):
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_DETAIL_GONE"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+            self.show_mailbox_panel(player)
+            return
+        view = self.mail_system.build_view(row, xuid)
+        if view["unread"]:
+            self.mail_system.mark_read(str(view.get("mail_id")), xuid)
+        # 正文
+        content_lines = [
+            self.language_manager.GetText("MAIL_DETAIL_SENDER_LINE").format(
+                self.language_manager.GetText("MAIL_TAG_GLOBAL")
+                if view["is_global"]
+                else str(view.get("sender_name") or "-")
+            ),
+            self.language_manager.GetText("MAIL_DETAIL_TIME_LINE").format(
+                self._format_ts_display(view.get("send_time") or 0)
+            ),
+        ]
+        body = str(view.get("content") or "").strip()
+        if body:
+            content_lines.append("")
+            content_lines.append(body)
+        content_lines.append("")
+        # 附件清单
+        attach_lines = []
+        try:
+            attach_money = float(view.get("money") or 0)
+        except (TypeError, ValueError):
+            attach_money = 0.0
+        if attach_money > 0:
+            attach_lines.append(
+                self.language_manager.GetText("MAIL_ATTACH_MONEY_LINE").format(
+                    self._format_money_display(attach_money)
+                )
+            )
+        for it in view.get("items") or []:
+            attach_lines.append(
+                self.language_manager.GetText("MAIL_ATTACH_ITEM_LINE").format(
+                    it.get("item_name"), it.get("count")
+                )
+            )
+        content_lines.append(
+            self.language_manager.GetText("MAIL_ATTACH_LIST_HEADER")
+            if attach_lines
+            else self.language_manager.GetText("MAIL_ATTACH_NONE")
+        )
+        content_lines.extend(attach_lines)
+        content_lines.append("")
+        expire_time = float(view.get("expire_time") or 0)
+        if expire_time > 0:
+            content_lines.append(
+                self.language_manager.GetText("MAIL_DETAIL_EXPIRE_LINE").format(
+                    self._format_ts_display(expire_time)
+                )
+            )
+        else:
+            content_lines.append(self.language_manager.GetText("MAIL_DETAIL_NO_EXPIRE"))
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_DETAIL_TITLE").format(
+                str(view.get("title") or "").strip() or self.language_manager.GetText("MAIL_NO_TITLE")
+            ),
+            content="\n".join(content_lines),
+            on_close=None,
+        )
+        if view["unclaimed"]:
+            panel.add_button(
+                self.language_manager.GetText("MAIL_CLAIM_BUTTON"),
+                icon=self._ui_icon(ui_icons.CLAIM_REWARD),
+                on_click=lambda p, mid=str(view.get("mail_id")): self._mail_claim_attachments(p, mid),
+            )
+        # 个人邮件：附件领完（或本无附件）才允许删除，防止误删丢附件
+        if not view["is_global"] and not view["unclaimed"]:
+            panel.add_button(
+                self.language_manager.GetText("MAIL_DELETE_BUTTON"),
+                on_click=lambda p, mid=str(view.get("mail_id")): self._mail_delete_player(p, mid),
+            )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_BACK_TO_BOX_BUTTON"),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_mailbox_panel,
+        )
+        player.send_form(panel)
+
+    def _mail_deliver_attachments(self, player: Player, view: Dict[str, Any]) -> List[str]:
+        """把邮件附件实际发到玩家手里（金币入账 + 逐条 give）。返回描述列表。"""
+        parts: List[str] = []
+        try:
+            amount = float(view.get("money") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount > 0:
+            if self.increase_player_money(player, amount, notify=False):
+                parts.append(
+                    self.language_manager.GetText("MAIL_CLAIM_MONEY_PART").format(
+                        self._format_money_display(amount)
+                    )
+                )
+            else:
+                self.report_arc_error(
+                    "MAIL01",
+                    f"mail claim money failed mail={view.get('mail_id')!r} player={player.name!r} amount={amount!r}",
+                    player,
+                )
+        for desc in self._grant_items_to_player(player, view.get("items") or []):
+            parts.append(desc)
+        return parts
+
+    def _mail_claim_attachments(self, player: Player, mail_id: str):
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        row = self.mail_system.get_mail(mail_id)
+        if row is None or self.mail_system._is_expired_row(row):
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_DETAIL_GONE"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+            self.show_mailbox_panel(player)
+            return
+        view = self.mail_system.build_view(row, xuid)
+        if view["claimed"]:
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_CLAIM_ALREADY"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+            self.show_mail_detail_panel(player, mail_id)
+            return
+        if not self.mail_system.try_mark_claimed(mail_id, xuid):
+            # 并发下已被领取（或多服另一端先领）
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_CLAIM_ALREADY"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+            self.show_mail_detail_panel(player, mail_id)
+            return
+        parts = self._mail_deliver_attachments(player, view)
+        summary = "，".join(parts) if parts else self.language_manager.GetText("MAIL_ATTACH_NONE")
+        self._notify_important(
+            player,
+            self.language_manager.GetText("MAIL_CLAIM_SUCCESS").format(summary),
+            title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+        )
+        self.show_mailbox_panel(player)
+
+    def _mail_claim_all(self, player: Player):
+        """一键领取：所有未领取附件的邮件逐封发放。"""
+        xuid = str(getattr(player, "xuid", "") or "").strip()
+        delivered = 0
+        for view in self.mail_system.list_mails_for_xuid(xuid, limit=100):
+            if not view["unclaimed"]:
+                continue
+            if not self.mail_system.try_mark_claimed(str(view.get("mail_id")), xuid):
+                continue
+            self._mail_deliver_attachments(player, view)
+            delivered += 1
+        if delivered > 0:
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_CLAIM_ALL_SUCCESS").format(delivered),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+        else:
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_CLAIM_NOTHING"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+        self.show_mailbox_panel(player)
+
+    def _mail_delete_player(self, player: Player, mail_id: str):
+        if self.mail_system.delete_mail(mail_id):
+            self._notify_important(
+                player,
+                self.language_manager.GetText("MAIL_DELETE_SUCCESS"),
+                title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+            )
+        self.show_mailbox_panel(player)
+
+    def _grant_items_to_player(self, player: Player, items: Optional[List]) -> List[str]:
+        """逐条 give 发放物品；返回成功发放的 '物品ID×数量' 描述列表。"""
+        granted: List[str] = []
+        if player is None:
+            return granted
+        for it in MailSystem.normalize_items(items):
+            try:
+                self.server.dispatch_command(
+                    self.server.command_sender,
+                    f"give {format_mc_command_player_name(player.name)} {it['item_name']} {it['count']}",
+                )
+                granted.append(f"{it['item_name']}×{it['count']}")
+            except Exception:
+                pass
+        return granted
+
+    # ------------------------------------------------------------------ OP 邮件管理
+
+    def show_op_mail_manage_panel(self, player: Player):
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_OP_MANAGE_TITLE"),
+            on_close=None,
+        )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_OP_SEND_PLAYER_BUTTON"),
+            icon=self._ui_icon(ui_icons.MAIL),
+            on_click=self.show_op_mail_pick_target,
+        )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_OP_SEND_GLOBAL_BUTTON"),
+            icon=self._ui_icon(ui_icons.MAIL),
+            on_click=lambda p: self.show_op_mail_compose_panel(p, None, True),
+        )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_OP_RECENT_BUTTON"),
+            icon=self._ui_icon(ui_icons.OP_RELOAD),
+            on_click=self.show_op_mail_recent_panel,
+        )
+        panel.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_op_main_panel,
+        )
+        player.send_form(panel)
+
+    def show_op_mail_pick_target(self, player: Player):
+        """选收件玩家：在线玩家按钮 + 手动输名（支持不在线玩家）。"""
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_OP_SEND_PLAYER_TITLE"),
+            content=self.language_manager.GetText("MAIL_OP_PICK_PLAYER_CONTENT"),
+            on_close=None,
+        )
+        for p in (self.server.online_players or []):
+            panel.add_button(
+                p.name,
+                on_click=lambda _p, name=p.name, xuid=str(p.xuid): self.show_op_mail_compose_panel(
+                    _p, (name, xuid), False
+                ),
+            )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_OP_INPUT_NAME_BUTTON"),
+            on_click=self.show_op_mail_input_target_name,
+        )
+        panel.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            on_click=self.show_op_mail_manage_panel,
+        )
+        player.send_form(panel)
+
+    def show_op_mail_input_target_name(self, player: Player):
+        name_input = TextInput(
+            label=self.language_manager.GetText("MAIL_OP_INPUT_NAME_LABEL"),
+            placeholder=self.language_manager.GetText("MAIL_OP_INPUT_NAME_PLACEHOLDER"),
+        )
+
+        def on_submit(p: Player, json_str: str):
+            try:
+                data = json.loads(json_str)
+            except (TypeError, ValueError):
+                self.show_op_mail_manage_panel(p)
+                return
+            target_name = str(data[0] if data else "").strip()
+            if not target_name:
+                self.show_op_mail_manage_panel(p)
+                return
+            xuid = self.get_player_xuid_by_name(target_name)
+            if not xuid:
+                p.send_message(
+                    self.language_manager.GetText("MAIL_OP_TARGET_NOT_FOUND").format(target_name)
+                )
+                self.show_op_mail_pick_target(p)
+                return
+            self.show_op_mail_compose_panel(p, (target_name, xuid), False)
+
+        form = ModalForm(
+            title=self.language_manager.GetText("MAIL_OP_SEND_PLAYER_TITLE"),
+            controls=[name_input],
+            on_close=None,
+            on_submit=on_submit,
+        )
+        player.send_form(form)
+
+    def show_op_mail_compose_panel(
+        self,
+        player: Player,
+        target: Optional[Tuple[str, str]],
+        is_global: bool,
+    ):
+        """邮件编辑：target=(玩家名, xuid) 为个人邮件，None 且 is_global=True 为全服。"""
+        title_input = TextInput(
+            label=self.language_manager.GetText("MAIL_OP_TITLE_LABEL"),
+            placeholder=self.language_manager.GetText("MAIL_OP_TITLE_PLACEHOLDER"),
+        )
+        content_input = TextInput(
+            label=self.language_manager.GetText("MAIL_OP_CONTENT_LABEL"),
+            placeholder=self.language_manager.GetText("MAIL_OP_CONTENT_PLACEHOLDER"),
+        )
+        items_input = TextInput(
+            label=self.language_manager.GetText("MAIL_OP_ITEMS_LABEL"),
+            placeholder=self.language_manager.GetText("MAIL_OP_ITEMS_PLACEHOLDER"),
+            default_value="",
+        )
+        money_input = TextInput(
+            label=self.language_manager.GetText("MAIL_OP_MONEY_LABEL"),
+            placeholder="0",
+            default_value="0",
+        )
+        back_target = self.show_op_mail_pick_target if not is_global else self.show_op_mail_manage_panel
+
+        def on_submit(p: Player, json_str: str):
+            try:
+                data = json.loads(json_str)
+            except (TypeError, ValueError):
+                back_target(p)
+                return
+            if self._modal_choice_is_back(data, 0):
+                back_target(p)
+                return
+            mail_title = str(data[1] if len(data) > 1 else "").strip()
+            mail_content = str(data[2] if len(data) > 2 else "").strip()
+            items = self._parse_reward_items(str(data[3] if len(data) > 3 else ""))
+            try:
+                money = max(0.0, round(float(str(data[4] if len(data) > 4 else 0) or 0), 2))
+            except (TypeError, ValueError):
+                money = 0.0
+            if not mail_title:
+                p.send_message(self.language_manager.GetText("MAIL_OP_NEED_TITLE"))
+                self.show_op_mail_compose_panel(p, target, is_global)
+                return
+            sender_name = str(getattr(p, "name", "") or "").strip() or self.language_manager.GetText("MAIL_SENDER_SYSTEM")
+            if is_global:
+                mail_id = self.mail_system.send_global_mail(
+                    sender_name=sender_name,
+                    title=mail_title,
+                    content=mail_content,
+                    items=items,
+                    money=money,
+                    expire_days=expire_days,
+                )
+                if mail_id:
+                    if money > 0 or items:
+                        announce = self.language_manager.GetText("MAIL_GLOBAL_ANNOUNCE_ATTACH")
+                    else:
+                        announce = self.language_manager.GetText("MAIL_GLOBAL_ANNOUNCE")
+                    self._broadcast_text(announce.format(mail_title))
+                    self._notify_important(
+                        p,
+                        self.language_manager.GetText("MAIL_OP_SEND_SUCCESS"),
+                        title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+                    )
+                else:
+                    p.send_message(self.language_manager.GetText("MAIL_OP_SEND_FAIL"))
+            else:
+                if not target:
+                    back_target(p)
+                    return
+                target_name, target_xuid = target
+                mail_id = self.mail_system.send_mail(
+                    receiver_xuid=target_xuid,
+                    receiver_name=str(target_name),
+                    sender_name=sender_name,
+                    title=mail_title,
+                    content=mail_content,
+                    items=items,
+                    money=money,
+                    expire_days=expire_days,
+                )
+                if mail_id:
+                    self._notify_important(
+                        p,
+                        self.language_manager.GetText("MAIL_OP_SEND_SUCCESS"),
+                        title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+                    )
+                    online = self._find_online_player_by_xuid(str(target_xuid))
+                    if online is not None:
+                        self._notify_important(
+                            online,
+                            self.language_manager.GetText("MAIL_NEW_MAIL_NOTIFY").format(mail_title),
+                            title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+                        )
+                else:
+                    p.send_message(self.language_manager.GetText("MAIL_OP_SEND_FAIL"))
+            self.show_op_mail_manage_panel(p)
+
+        form = ModalForm(
+            title=(
+                self.language_manager.GetText("MAIL_OP_COMPOSE_GLOBAL_TITLE")
+                if is_global
+                else self.language_manager.GetText("MAIL_OP_COMPOSE_PLAYER_TITLE").format(
+                    target[0] if target else "-"
+                )
+            ),
+            controls=[
+                self._modal_nav_dropdown(),
+                title_input,
+                content_input,
+                items_input,
+                money_input,
+            ],
+            on_close=None,
+            on_submit=on_submit,
+        )
+        player.send_form(form)
+
+    def show_op_mail_recent_panel(self, player: Player):
+        """OP：最近邮件列表，点击进入删除确认。"""
+        rows = self.mail_system.list_recent_mails(30)
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_OP_RECENT_TITLE"),
+            content=self.language_manager.GetText("MAIL_OP_RECENT_CONTENT"),
+            on_close=None,
+        )
+        tag_global = self.language_manager.GetText("MAIL_TAG_GLOBAL")
+        for r in rows:
+            receiver_label = (
+                tag_global
+                if int(r.get("is_global") or 0)
+                else str(r.get("receiver_name") or r.get("receiver_xuid") or "-")
+            )
+            title_text = str(r.get("title") or "").strip() or self.language_manager.GetText("MAIL_NO_TITLE")
+            label = f"[{receiver_label}] {title_text}（{self._format_ts_display(r.get('send_time') or 0)}）"
+            panel.add_button(
+                label,
+                on_click=lambda p, mid=str(r.get("mail_id")): self._op_mail_delete_confirm(p, mid),
+            )
+        panel.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            on_click=self.show_op_mail_manage_panel,
+        )
+        player.send_form(panel)
+
+    def _op_mail_delete_confirm(self, player: Player, mail_id: str):
+        row = self.mail_system.get_mail(mail_id)
+        if row is None:
+            self.show_op_mail_recent_panel(player)
+            return
+        title_text = str(row.get("title") or "").strip() or self.language_manager.GetText("MAIL_NO_TITLE")
+        panel = ActionForm(
+            title=self.language_manager.GetText("MAIL_OP_DELETE_CONFIRM_TITLE"),
+            content=self.language_manager.GetText("MAIL_OP_DELETE_CONFIRM_CONTENT").format(title_text),
+            on_close=None,
+        )
+        panel.add_button(
+            self.language_manager.GetText("MAIL_OP_DELETE_YES_BUTTON"),
+            on_click=lambda p, mid=mail_id: self._op_mail_do_delete(p, mid),
+        )
+        panel.add_button(
+            self.language_manager.GetText("RETURN_BUTTON_TEXT"),
+            on_click=self.show_op_mail_recent_panel,
+        )
+        player.send_form(panel)
+
+    def _op_mail_do_delete(self, player: Player, mail_id: str):
+        self.mail_system.delete_mail(mail_id)
+        self._notify_important(
+            player,
+            self.language_manager.GetText("MAIL_DELETE_SUCCESS"),
+            title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
+        )
+        self.show_op_mail_recent_panel(player)
 
     # ---------- 表单关闭与传送倒计时辅助 ----------
 
@@ -13543,6 +14185,9 @@ class ARCCorePlugin(Plugin):
         op_main_panel.add_button(self.language_manager.GetText('OP_ECONOMY_MANAGE_ENTRY'),
                                  icon=self._ui_icon(ui_icons.BANK),
                                  on_click=self.show_economy_manage_panel)
+        op_main_panel.add_button(self.language_manager.GetText('OP_MAIL_MANAGE_ENTRY'),
+                                 icon=self._ui_icon(ui_icons.MAIL),
+                                 on_click=self.show_op_mail_manage_panel)
         op_main_panel.add_button(self.language_manager.GetText('OP_LAND_MANAGE_ENTRY'),
                                  icon=self._ui_icon(ui_icons.LAND),
                                  on_click=self.show_op_land_manage_panel)

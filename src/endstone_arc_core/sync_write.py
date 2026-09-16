@@ -6,6 +6,9 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # 可同步表的主键（用于写后回读整行再 upsert）
+# 注意：中心落库是 INSERT OR REPLACE，按主键覆盖。自增 id 在各服独立计数，
+# 多服并发插入会撞号互相覆盖——跨服同步表的主键必须全局唯一
+# （自然键或 UUID；player_mail 用 uuid 即为此故）。
 SYNC_TABLE_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
     "player_basic_info": ("xuid",),
     "player_economy": ("xuid",),
@@ -16,6 +19,8 @@ SYNC_TABLE_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
     "guilds": ("id",),
     "guild_members": ("guild_id", "xuid"),
     "guild_invites": ("id",),
+    "player_mail": ("mail_id",),
+    "player_mail_claim": ("mail_id", "xuid"),
 }
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

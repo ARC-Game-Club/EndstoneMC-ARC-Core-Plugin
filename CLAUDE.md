@@ -32,6 +32,7 @@ Tests live in `tests/` (plain `unittest`, no external deps): run with `python -m
 | `arc_core_plugin.py` | Main plugin class: event handlers (`on_player_join`, `on_block_break`, etc.), all form/UI builders (main menu, OP panel, sub-menus), command dispatch, position-check thread, API methods exposed to other plugins |
 | `DatabaseManager.py` | Thread-safe SQLite wrapper with table-level routing (for cross-server DB splitting). Provides `execute`, `query_one`, `query_all`, `insert`, `update`, `delete`, `create_table` |
 | `Economy.py` | Balance CRUD, transfer logic, richest-player tracking, fixed deposits (monthly compound interest, 30 days = 1 month, settlement math in `compute_fixed_deposit_payout`) |
+| `MailSystem.py` | Mailbox CRUD: personal/global mails, attachments (items JSON + money), per-player read/claim state (`player_mail_claim` for global mails, conditional UPDATE against double-claim), expiry purge. `mail_id` is a uuid — sync hub applies rows with INSERT OR REPLACE, so cross-server tables must have globally unique keys |
 | `LandSystem.py` | Land claim creation, overlap detection, chunk-index lookup, protection enforcement, sub-lands, land sales with VAT |
 | `TeleportSystem.py` | Home/warp/TPA/random/death/cross-server teleport; `generate_tp_command_to_position()` helper |
 | `GuildSystem.py` | Guild CRUD, membership, invites, contribution points, size tiers, join approval |
@@ -72,7 +73,7 @@ All block coordinate calculations use `math.floor()` to handle negative coordina
 
 ### Cross-Server Support
 
-Cross-server data uses **SyncServer** (hub) + **SyncClient** (remote). Enable `ENABLE_SYNC_SERVER` on the main instance and `ENABLE_SYNC_CLIENT` on child servers. Category toggles: `SYNC_CLIENT_SYNC_PLAYER`, `_ECONOMY`, `_TITLE`, `_GUILD`.
+Cross-server data uses **SyncServer** (hub) + **SyncClient** (remote). Enable `ENABLE_SYNC_SERVER` on the main instance and `ENABLE_SYNC_CLIENT` on child servers. Category toggles: `SYNC_CLIENT_SYNC_PLAYER`, `_ECONOMY`, `_TITLE`, `_GUILD`, `_MAIL`.
 
 Protocol v4 adds third-party plugin tables: logical name `plugin_id:table`, hub physical table `psync_{plugin_id}_{table}`. Built-in tables keep the legacy `SyncTable` enum path. See `sync_plugin_api.py` and `docs/compose/spec/sync-plugin-api.md`.
 
@@ -97,6 +98,7 @@ Other EndStone plugins can call methods on the `ARCCorePlugin` instance via `ser
 - **Economy**: `api_get_player_money`、`api_change_player_money`、`api_adjust_player_money`、`api_get_player_money_rank`、`api_get_all_money_data`、`api_get_richest_player_money_data`、`api_get_player_total_assets`（总资产评估：现金+存单本金+领地成本）
 - **Titles**: `api_unlock_title`、`api_unlock_title_by_xuid`、`api_set_title_definition`、`api_ensure_title_definition`、`api_get_title_definition`、`api_list_title_definitions`、`api_has_unlocked_title`、`api_get_equipped_title`、`api_list_unlocked_titles`、`api_give_player_items`
 - **Player**: `api_get_player_xuid_by_name`、`api_get_player_name_by_xuid`、`api_get_player_playtime`
+- **Mail**: `api_send_mail(title, content, player_name/xuid, items, money, sender_name, expire_days)`（支持不在线玩家）、`api_send_global_mail(..., announce)`、`api_count_player_mails(unread_only)`。OP 面板「邮件管理」可发信并全服通告；玩家经主菜单「邮箱」或 `/arc mail` 查收领取
 - **Lands**: `api_if_position_in_land(dimension, (x,y,z))`（规范化维度 + 三维 Y + 多层生效领地）、`api_resolve_land_at_position`、`api_list_lands_at_position`、`api_get_land_info(land_id)`、`api_get_player_lands`、`api_get_guild_lands`、`api_check_land_access`
 - **Sky Eye**: `api_sky_eye_query`、`api_sky_eye_query_text`、`api_sky_eye_player_now`
 - **Teleport**: `api_teleport_player_to`、`api_list_player_homes`、`api_list_public_warps`、`api_teleport_player_to_home`、`api_teleport_player_to_warp`

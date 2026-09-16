@@ -69,6 +69,16 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - 富豪榜排行系统、管理员金钱操作命令、实时余额变动提醒
 - **财富榜首富头衔** - 配置 `RICHEST_TITLE_NAME`（默认「首富」）、传奇稀有度；金钱变动后自动刷新财富榜第一，首富易主则撤销旧头衔并授予新首富；同分按 xuid 稳定排序；跨服仅主服计算、从服只消费同步头衔；可在 **OP 面板 → 经济管理 → 经济参数配置** 中修改
 
+### 📮 邮箱系统
+- **网游式邮箱** - 主菜单「邮箱」入口（有未读时按钮显示数量），或 `/arc mail` 直接打开；进服有未读邮件时 toast 提醒
+- **个人邮件 / 全服邮件** - OP 在 **OP 面板 → 邮件管理** 发信：给单个玩家（支持不在线玩家，按 XUID 落库）或发全服邮件；发件人显示为操作 OP 的名字
+- **附件物品与金币** - 邮件可附多件物品（格式 `物品ID 数量;物品ID 数量`，单封最多 12 条）与金币；玩家在邮件详情 **「领取附件」**，或列表页 **「一键领取全部附件」**；物品逐条 `give` 入包、金币入账
+- **全服通告** - 发全服邮件时聊天栏广播公告；带附件的公告会提示玩家从邮箱领取
+- **已读 / 领取状态** - 个人邮件状态记在邮件行上；全服邮件每名玩家独立记录（`player_mail_claim` 表，同一封每人只能领一次）；个人邮件附件领取后才可删除，防误删丢附件
+- **过期作废** - 配置 `MAIL_EXPIRE_DAYS`（[全服]，默认 30 天，`0` 永不过期）：到期邮件连同未领附件自动删除（打开邮箱时 + 每 30 分钟定时清理）
+- **跨服同步** - 邮件与领取状态随 `SYNC_CLIENT_SYNC_MAIL`（默认开）跨服同步：任意服发信全服可见，附件跨服只能领一次
+- **对外 API** - `api_send_mail` / `api_send_global_mail` / `api_count_player_mails`，供其它插件发活动奖励邮件，详见「API 接口」
+
 ### 📊 侧边栏总控
 - **原生计分板 SIDE_BAR**：每玩家独立 `Scoreboard`，复用稳定 objective 原地刷新（避免频繁销毁重建导致客户端闪退）
 - **多页面 + 定时翻页**：可见页 ≥ 2 时默认每 **10 秒**自动切换；可用 `/sidebar lock` 锁定
@@ -227,7 +237,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - **玩法配置以同步中心为准**：开启对应分项后，从服连接时会拉取并覆盖该类别的玩法配置（写入本机 `core_setting.yml`），主服改配置或重载后推送给已连接从服。本机路径、端口、`SYNC_CLIENT_*`、清道夫、出生点保护等仍各服独立
 - **从服时长/次数以主服为准**：从服进退服向同步中心上报该玩家 `session_count`/`total_playtime`，本地只缓存；`api_get_player_playtime` 展示前先向主服拉取
 - **模块**：`sync_protocol.py`、`sync_server.py`、`sync_client.py`、`sync_config.py`、`sync_outbox.py`、`sync_plugin_api.py`、`sync_write.py`
-- **可同步数据表**：跨服玩家账号信息（`player_basic_info`，含 **`once_op`** 粘性列）、经济（`player_economy`、`player_fixed_deposit` 定期存款存单）、头衔（`title_definitions` / `player_title_unlock_time` / `player_title_equipped`）、公会（`guilds` / `guild_members` / `guild_invites`）
+- **可同步数据表**：跨服玩家账号信息（`player_basic_info`，含 **`once_op`** 粘性列）、经济（`player_economy`、`player_fixed_deposit` 定期存款存单）、头衔（`title_definitions` / `player_title_unlock_time` / `player_title_equipped`）、公会（`guilds` / `guild_members` / `guild_invites`）、邮箱（`player_mail` / `player_mail_claim`，邮件正副本与全服邮件每人领取状态）
 - **本服本地表（不同步）**：**`player_local_info`** — 本服 `is_op`、剩余免费领地格、签到（每服独立）
 - **第三方插件表同步**：其它插件可把自己的表纳入跨服同步（协议 v4，逻辑名 `plugin_id:table`），见「API 接口 → 跨服插件表同步」与 `docs/compose/spec/sync-plugin-api.md`
 - **OP 面板**：点「跨服同步」即发起全面对账并显示运行状态
@@ -244,7 +254,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 ### 🔌 插件 API 系统
 - **统一玩家标识** - 多数接口同时支持游戏名与 **xuid**（填一个即可，xuid 优先）；旧的只传玩家名的调用仍可用
 - **调用入口**：`server.get_plugin("arc_core")`（与 pyproject entry-point 一致）
-- **接口分组**：经济、活动统计、头衔/发奖、领地、传送、侧边栏、天眼、跨服插件表同步、主菜单按钮注册、聊天前缀、玩家解析/时长/新手引导（详见下方「API 一览表」）；公会 API 已拆至 `arc_guild`
+- **接口分组**：经济、活动统计、头衔/发奖、领地、传送、侧边栏、天眼、邮箱、跨服插件表同步、主菜单按钮注册、聊天前缀、玩家解析/时长/新手引导（详见下方「API 一览表」）；公会 API 已拆至 `arc_guild`
 - **线程安全设计**，支持多插件并发调用
 
 ## 命令列表
@@ -257,6 +267,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 | `/arc tp` | 直接打开传送系统菜单 | 默认 | `/arc tp` |
 | `/arc bank` | 直接打开银行菜单 | 默认 | `/arc bank` |
 | `/arc guild` | 直接打开公会菜单（转发 arc_guild） | 默认 | `/arc guild` |
+| `/arc mail` | 直接打开邮箱 | 默认 | `/arc mail` |
 | `/pos1` | 记录当前坐标为坐标 1（OP 快捷，对应 OP 面板记录坐标 1） | OP | `/pos1` |
 | `/pos2` | 记录当前坐标为坐标 2 并打开 OP 面板（OP 快捷） | OP | `/pos2` |
 | `/updatespawnpos` | 更新当前维度的出生点位置 | OP | `/updatespawnpos` |
@@ -363,6 +374,9 @@ FIXED_DEPOSIT_RATE_3M=5              # 3 个月档月利率（%）
 FIXED_DEPOSIT_RATE_6M=5              # 6 个月档月利率（%）
 FIXED_DEPOSIT_RATE_12M=5             # 12 个月档月利率（%）
 ENABLE_FIXED_DEPOSIT=True            # 定期存款开关（[本服] 各服独立）
+
+# 邮箱系统（OP 面板 → 邮件管理 发个人/全服邮件，可附物品与金币）
+MAIL_EXPIRE_DAYS=30                  # 邮件保留天数（[全服] 随 SYNC_CLIENT_SYNC_MAIL 下发）；0 永不过期，过期未领附件作废
 
 # 领地系统
 DEFAULT_FREE_LAND_BLOCKS=100         # 新玩家默认免费领地格子数
@@ -653,6 +667,14 @@ class MyPlugin(Plugin):
 | `api_get_player_block_break_count` | `block_id="*"`，`player_name=""`，`xuid=""` | `int`：破坏方块累计 |
 | `api_get_player_block_place_count` | `block_id="*"`，`player_name=""`，`xuid=""` | `int`：放置方块累计 |
 | `api_get_player_total_assets` | `player_name=""`，`xuid=""` | `dict`：`balance`（现金），`deposits`（定期存款本金），`lands`（名下私人领地成本合计），`total`（三者之和）。供拍卖验资等场景 |
+
+#### 邮箱
+
+| 函数 | 参数 | 返回值 |
+|------|------|--------|
+| `api_send_mail` | `title`，`content=""`，`player_name=""`，`xuid=""`，`items=None`，`money=0`，`sender_name="系统"`，`expire_days=None` | `bool`：是否入库成功。支持不在线玩家；在线会收到新邮件 toast。`items` 格式 `[{"item_name": id, "count": n}]`；`expire_days` 缺省用 `MAIL_EXPIRE_DAYS`，`<=0` 永不过期 |
+| `api_send_global_mail` | `title`，`content=""`，`items=None`，`money=0`，`sender_name="系统"`，`announce=False`，`expire_days=None` | `bool`：是否入库成功。全服每名玩家各自领取附件；`announce=True` 同时聊天栏全服通告 |
+| `api_count_player_mails` | `player_name=""`，`xuid=""`，`unread_only=False` | `int`：邮箱邮件数（含全服邮件）；`unread_only=True` 只数未读 |
 
 #### 侧边栏
 

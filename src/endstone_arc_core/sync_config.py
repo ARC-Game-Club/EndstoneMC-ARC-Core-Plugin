@@ -10,6 +10,7 @@ SYNC_CATEGORY_SETTING_KEYS: Dict[str, str] = {
     "SYNC_CLIENT_SYNC_ECONOMY": "economy",
     "SYNC_CLIENT_SYNC_TITLE": "title",
     "SYNC_CLIENT_SYNC_GUILD": "guild",
+    "SYNC_CLIENT_SYNC_MAIL": "mail",
 }
 
 # 同步类别 -> 数据表（与 sync_protocol.TABLE_TO_ENUM 一致）
@@ -22,6 +23,7 @@ SYNC_CATEGORY_TABLES: Dict[str, List[str]] = {
         "player_title_equipped",
     ],
     "guild": ["guilds", "guild_members", "guild_invites"],
+    "mail": ["player_mail", "player_mail_claim"],
 }
 
 # 同步类别 -> 全服统一规则（仅同步中心维护；从服只读，随对应数据开关下发）
@@ -49,6 +51,9 @@ SYNC_CATEGORY_SHARED_SETTINGS: Dict[str, Tuple[str, ...]] = {
         "GUILD_UPGRADE_TO_MEDIUM_COST",
         "GUILD_UPGRADE_TO_LARGE_COST",
         "GUILD_RENAME_COST",
+    ),
+    "mail": (
+        "MAIL_EXPIRE_DAYS",
     ),
 }
 

@@ -9,11 +9,12 @@ DATABASE_PATH=ARCCore.db
 # =============================================================================
 # 跨服数据同步（v0.9.43+，仅网络 SyncServer / SyncClient）
 #
-# 【同步的是数据表】由下方四个 SYNC_CLIENT_SYNC_* 开关控制（远程从服生效）：
+# 【同步的是数据表】由下方 SYNC_CLIENT_SYNC_* 开关控制（远程从服生效）：
 #   SYNC_CLIENT_SYNC_PLAYER  → player_basic_info（账号、密码、邀请、总时长、once_op）
 #   SYNC_CLIENT_SYNC_ECONOMY → player_economy（银行存款余额）
 #   SYNC_CLIENT_SYNC_TITLE   → title_definitions / 解锁 / 佩戴
 #   SYNC_CLIENT_SYNC_GUILD   → guilds / guild_members / guild_invites
+#   SYNC_CLIENT_SYNC_MAIL    → player_mail / player_mail_claim（邮件与全服邮件领取状态）
 # 不同步：player_local_info（本服 OP、签到记录、免费圈地格）、领地、Home、天眼等
 #
 # 【全服规则 [全服]】仅同步中心（ENABLE_SYNC_SERVER=True）可改；从服只读，连接后按
@@ -21,6 +22,7 @@ DATABASE_PATH=ARCCore.db
 #   经济（需 SYNC_CLIENT_SYNC_ECONOMY）：PLAYER_INIT_MONEY_NUM、HIDE_OP_IN_MONEY_RANKING、RICHEST_TITLE_NAME、FIXED_DEPOSIT_RATE_1M/3M/6M/12M
 #   头衔（需 SYNC_CLIENT_SYNC_TITLE）：DEFAULT_TITLE、OP_TITLE
 #   公会（需 SYNC_CLIENT_SYNC_GUILD）：GUILD_CREATE_COST、GUILD_RENAME_COST、GUILD_UPGRADE_*、GUILD_SIZE_*
+#   邮箱（需 SYNC_CLIENT_SYNC_MAIL）：MAIL_EXPIRE_DAYS
 #
 # 【本服玩法 [本服]】永远只读本机 yml，中心不会覆盖（各服可不同）：
 #   签到金钱/物品、邀请奖励、传送费、领地价、小喇叭、击杀公会贡献、公会领地传送消耗等
@@ -49,6 +51,7 @@ SYNC_CLIENT_SYNC_PLAYER=True
 SYNC_CLIENT_SYNC_ECONOMY=True
 SYNC_CLIENT_SYNC_TITLE=True
 SYNC_CLIENT_SYNC_GUILD=True
+SYNC_CLIENT_SYNC_MAIL=True
 # 条件头衔（首富等）是否由本机计算。主服/同步中心留 True；远程从服建议 False。
 # 留空则自动推断：远程客户端=否；其余=是。
 CONDITIONAL_TITLE_AUTHORITY=
@@ -69,6 +72,11 @@ FIXED_DEPOSIT_RATE_3M=5
 FIXED_DEPOSIT_RATE_6M=5
 FIXED_DEPOSIT_RATE_12M=5
 ENABLE_FIXED_DEPOSIT=True
+
+# 邮箱系统 [本服]：OP 面板 → 邮件管理 可发个人/全服邮件（可附物品与金币）；玩家经主菜单-邮箱查收领取
+# 全服邮件发送时聊天栏全服通告；过期未领取的邮件附件作废自动删除
+# MAIL_EXPIRE_DAYS [全服]：邮件保留天数（需 SYNC_CLIENT_SYNC_MAIL）；0 表示永不过期
+MAIL_EXPIRE_DAYS=30
 
 # 出生点保护
 IF_PROTECT_SPAWN=False

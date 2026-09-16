@@ -30,6 +30,9 @@ CROSS_SERVER = f"{_BASE}/cross_server.png"
 TRANSFER = f"{_BASE}/transfer.png"
 MONEY_RANK = f"{_BASE}/money_rank.png"
 
+# 邮箱
+MAIL = f"{_BASE}/mail.png"
+
 # 领地
 LAND_MANAGE = f"{_BASE}/land_manage.png"
 LAND_CREATE = f"{_BASE}/land_create.png"

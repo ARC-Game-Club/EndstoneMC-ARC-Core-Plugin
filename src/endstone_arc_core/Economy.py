@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """经济系统逻辑：金钱存储、增减、排行等（基于 XUID，精确到分）"""
 import time
+import uuid
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -315,15 +316,106 @@ class Economy:
     # ------------------------------------------------------------------
 
     def init_fixed_deposit_table(self) -> bool:
-        """初始化定期存款表：每张存单一行，支取即删行，存在即视为存单生效中"""
-        fields = {
-            "deposit_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
-            "xuid": "TEXT NOT NULL",
-            "amount": "REAL NOT NULL",
-            "start_ts": "REAL NOT NULL",
-            "term_months": "INTEGER NOT NULL",
-        }
-        return self.db.create_table(self.FIXED_DEPOSIT_TABLE, fields)
+        """初始化定期存款表：每张存单一行，支取即删行，存在即视为存单生效中。
+
+        deposit_id 为 uuid（TEXT 主键）：跨服同步中心按主键 INSERT OR REPLACE 落库，
+        各服独立的自增整数会撞号互相覆盖，必须全局唯一。
+        """
+        ok = self.db.create_table(
+            self.FIXED_DEPOSIT_TABLE,
+            {
+                "deposit_id": "TEXT PRIMARY KEY",
+                "xuid": "TEXT NOT NULL",
+                "amount": "REAL NOT NULL",
+                "start_ts": "REAL NOT NULL",
+                "term_months": "INTEGER NOT NULL",
+            },
+        )
+        if ok:
+            self._upgrade_fixed_deposit_id_to_uuid()
+        return ok
+
+    def _upgrade_fixed_deposit_id_to_uuid(self) -> bool:
+        """旧自增整数主键 → uuid：旧行整表重发 uuid 后原子换表。
+
+        背景：各服自增计数独立，且该表此前未纳入镜像白名单、跨服从未同步过，
+        保留旧 id 会在首次同步合并时按主键互相覆盖；重发 uuid 可安全合并。
+        """
+        table = self.FIXED_DEPOSIT_TABLE
+        try:
+            cols = self.db.query_all(f"PRAGMA table_info({table})")
+            if not cols:
+                return True  # 首次建表，无旧行
+            id_type = ""
+            for col in cols:
+                if col.get("name") == "deposit_id":
+                    id_type = str(col.get("type") or "").upper()
+                    break
+            if id_type != "INTEGER":
+                return True  # 已是 uuid 主键
+            rows = self.db.query_all(f"SELECT * FROM {table}")
+            bak = self.db.backup_database_for_table(table)
+            if not bak:
+                print(f"[ARC Core]Skip {table} uuid upgrade: VACUUM INTO backup failed")
+                return False
+            conn = self.db.connection_for_table(table)
+            old_isolation = conn.isolation_level
+            try:
+                with self.db.suppress_write_notify():
+                    conn.commit()
+                    conn.isolation_level = None
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        conn.execute(f"DROP TABLE IF EXISTS {table}_uuid_new")  # nosec B608
+                        conn.execute(
+                            f"CREATE TABLE {table}_uuid_new ("  # nosec B608
+                            "deposit_id TEXT PRIMARY KEY, "
+                            "xuid TEXT NOT NULL, "
+                            "amount REAL NOT NULL, "
+                            "start_ts REAL NOT NULL, "
+                            "term_months INTEGER NOT NULL)"
+                        )
+                        for row in rows:
+                            conn.execute(
+                                f"INSERT INTO {table}_uuid_new "  # nosec B608
+                                "(deposit_id, xuid, amount, start_ts, term_months) "
+                                "VALUES (?, ?, ?, ?, ?)",
+                                (
+                                    uuid.uuid4().hex,
+                                    str(row.get("xuid")),
+                                    float(row.get("amount") or 0),
+                                    float(row.get("start_ts") or 0),
+                                    int(row.get("term_months") or 1),
+                                ),
+                            )
+                        new_n = conn.execute(
+                            f"SELECT COUNT(*) FROM {table}_uuid_new"  # nosec B608
+                        ).fetchone()[0]
+                        if int(new_n) != len(rows):
+                            raise RuntimeError(
+                                f"deposit uuid upgrade row mismatch: old={len(rows)} new={new_n}"
+                            )
+                        conn.execute(f"DROP TABLE {table}")  # nosec B608
+                        conn.execute(
+                            f"ALTER TABLE {table}_uuid_new RENAME TO {table}"  # nosec B608
+                        )
+                        conn.execute("COMMIT")
+                    except Exception:
+                        conn.execute("ROLLBACK")
+                        raise
+                print(
+                    f"[ARC Core]Upgraded {table} deposit_id to uuid "
+                    f"(backup={bak}, rows={new_n})"
+                )
+                return True
+            finally:
+                conn.isolation_level = old_isolation
+        except Exception as e:
+            self._log("error", f"[ARC Core]Upgrade {table} to uuid error: {e}")
+            self._emit_persistent_error(
+                "BANK22", f"upgrade_fixed_deposit_id_to_uuid: {e}", e
+            )
+            return False
 
     def get_fixed_deposit_monthly_rate(self, term_months: int) -> float:
         """读取指定档位的定期存款月利率（百分比数值，如 5 = 5%）。
@@ -392,6 +484,7 @@ class Economy:
             return self.db.insert(
                 self.FIXED_DEPOSIT_TABLE,
                 {
+                    "deposit_id": uuid.uuid4().hex,
                     "xuid": str(xuid),
                     "amount": self.round_money(amount),
                     "start_ts": float(time.time()),
@@ -415,6 +508,7 @@ class Economy:
             return self.db.insert(
                 self.FIXED_DEPOSIT_TABLE,
                 {
+                    "deposit_id": uuid.uuid4().hex,
                     "xuid": str(xuid),
                     "amount": self.round_money(amount),
                     "start_ts": float(start_ts),
@@ -444,17 +538,20 @@ class Economy:
             )
             return []
 
-    def take_fixed_deposit(self, deposit_id: int, xuid: str) -> Optional[Dict[str, Any]]:
-        """删除并返回一张属于该玩家的存单；不存在 / 不属于该玩家 / 删除失败返回 None"""
+    def take_fixed_deposit(self, deposit_id, xuid: str) -> Optional[Dict[str, Any]]:
+        """删除并返回一张属于该玩家的存单；不存在 / 不属于该玩家 / 删除失败返回 None
+
+        deposit_id 兼容旧整数值与 uuid 字符串（统一按文本比较）。
+        """
         try:
             row = self.db.query_one(
-                f"SELECT * FROM {self.FIXED_DEPOSIT_TABLE} WHERE deposit_id = ? AND xuid = ?",
-                (int(deposit_id), str(xuid)),
+                f"SELECT * FROM {self.FIXED_DEPOSIT_TABLE} WHERE deposit_id = ? AND xuid = ?",  # nosec B608
+                (str(deposit_id), str(xuid)),
             )
             if row is None:
                 return None
             ok = self.db.delete(
-                self.FIXED_DEPOSIT_TABLE, "deposit_id = ?", (int(deposit_id),)
+                self.FIXED_DEPOSIT_TABLE, "deposit_id = ?", (str(deposit_id),)
             )
             return row if ok else None
         except Exception as e:

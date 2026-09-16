@@ -31,7 +31,7 @@ Tests live in `tests/` (plain `unittest`, no external deps): run with `python -m
 |---|---|
 | `arc_core_plugin.py` | Main plugin class: event handlers (`on_player_join`, `on_block_break`, etc.), all form/UI builders (main menu, OP panel, sub-menus), command dispatch, position-check thread, API methods exposed to other plugins |
 | `DatabaseManager.py` | Thread-safe SQLite wrapper with table-level routing (for cross-server DB splitting). Provides `execute`, `query_one`, `query_all`, `insert`, `update`, `delete`, `create_table` |
-| `Economy.py` | Balance CRUD, transfer logic, richest-player tracking, fixed deposits (monthly compound interest, 30 days = 1 month, settlement math in `compute_fixed_deposit_payout`) |
+| `Economy.py` | Balance CRUD, transfer logic, richest-player tracking, fixed deposits (monthly compound interest, 30 days = 1 month, settlement math in `compute_fixed_deposit_payout`). Deposit `deposit_id` is a uuid (TEXT PK); legacy integer-PK tables are rebuilt with fresh uuids on init so cross-server sync (hub applies rows with INSERT OR REPLACE by PK) never collides |
 | `MailSystem.py` | Mailbox CRUD: personal/global mails, attachments (items JSON + money), per-player read/claim state (`player_mail_claim` for global mails, conditional UPDATE against double-claim), expiry purge. `mail_id` is a uuid — sync hub applies rows with INSERT OR REPLACE, so cross-server tables must have globally unique keys |
 | `LandSystem.py` | Land claim creation, overlap detection, chunk-index lookup, protection enforcement, sub-lands, land sales with VAT |
 | `TeleportSystem.py` | Home/warp/TPA/random/death/cross-server teleport; `generate_tp_command_to_position()` helper |

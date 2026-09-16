@@ -19,6 +19,8 @@ SYNC_TABLE_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
     "guilds": ("id",),
     "guild_members": ("guild_id", "xuid"),
     "guild_invites": ("id",),
+    # 存单 deposit_id 已迁为 uuid（自增整数跨服撞号），迁移后纳入镜像
+    "player_fixed_deposit": ("deposit_id",),
     "player_mail": ("mail_id",),
     "player_mail_claim": ("mail_id", "xuid"),
 }

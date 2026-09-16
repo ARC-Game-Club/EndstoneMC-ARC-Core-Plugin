@@ -1,18 +1,27 @@
 # -*- coding: utf-8 -*-
-"""定期存款结算数学（Economy.compute_fixed_deposit_payout / 月利率解析）单测"""
+"""定期存款结算数学（Economy.compute_fixed_deposit_payout / 月利率解析 / uuid 主键迁移）单测"""
 import importlib.util
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
-_ECONOMY_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "src" / "endstone_arc_core" / "Economy.py"
-)
+_ROOT = Path(__file__).resolve().parents[1]
+
+_ECONOMY_PATH = _ROOT / "src" / "endstone_arc_core" / "Economy.py"
 _spec = importlib.util.spec_from_file_location("economy_under_test", _ECONOMY_PATH)
 economy_mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
+sys.stdout.flush()
 _spec.loader.exec_module(economy_mod)
 
+_DM_PATH = _ROOT / "src" / "endstone_arc_core" / "DatabaseManager.py"
+_dm_spec = importlib.util.spec_from_file_location("DatabaseManager_econ_test", _DM_PATH)
+dm_mod = importlib.util.module_from_spec(_dm_spec)
+assert _dm_spec.loader is not None
+_dm_spec.loader.exec_module(dm_mod)
+
+DatabaseManager = dm_mod.DatabaseManager
 Economy = economy_mod.Economy
 MONTH = Economy.MONTH_SECONDS
 
@@ -121,6 +130,96 @@ class FixedDepositTermChoicesTests(unittest.TestCase):
 
     def test_month_seconds_is_thirty_days(self):
         self.assertEqual(MONTH, 30 * 24 * 3600)
+
+
+class FixedDepositUuidMigrationTests(unittest.TestCase):
+    """存单主键迁 uuid：旧整型表自动迁移、新表直接 uuid、镜像白名单纳入。"""
+
+    def setUp(self):
+        self._dbs = []
+        self._tds = []
+
+    def tearDown(self):
+        for db in self._dbs:
+            db.close()
+        self._dbs.clear()
+        for td in self._tds:
+            try:
+                td.cleanup()
+            except OSError:
+                pass
+        self._tds.clear()
+
+    def _make_economy(self, legacy=False):
+        td = tempfile.TemporaryDirectory()
+        self._tds.append(td)
+        db = DatabaseManager(str(Path(td.name) / "test.db"))
+        self._dbs.append(db)
+        econ = Economy(db, _FakeSettings())
+        if legacy:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS player_fixed_deposit ("
+                "deposit_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "xuid TEXT NOT NULL, amount REAL NOT NULL, "
+                "start_ts REAL NOT NULL, term_months INTEGER NOT NULL)"
+            )
+            db.execute(
+                "INSERT INTO player_fixed_deposit (xuid, amount, start_ts, term_months) "
+                "VALUES (?, ?, ?, ?)",
+                ("xuid_old", 100.0, 0.0, 3),
+            )
+        return db, econ
+
+    def test_new_table_uses_uuid_and_create_assigns_uuid(self):
+        db, econ = self._make_economy()
+        self.assertTrue(econ.init_fixed_deposit_table())
+        cols = db.query_all("PRAGMA table_info(player_fixed_deposit)")
+        id_type = next(
+            str(c.get("type") or "").upper()
+            for c in cols
+            if c.get("name") == "deposit_id"
+        )
+        self.assertNotEqual(id_type, "INTEGER")
+        self.assertTrue(econ.create_fixed_deposit("xuid_a", 50.0, 1))
+        rows = econ.list_fixed_deposits_by_xuid("xuid_a")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(str(rows[0]["deposit_id"])), 32)
+
+    def test_legacy_integer_ids_migrate_to_uuid(self):
+        db, econ = self._make_economy(legacy=True)
+        self.assertTrue(econ.init_fixed_deposit_table())
+        rows = econ.list_fixed_deposits_by_xuid("xuid_old")
+        self.assertEqual(len(rows), 1)
+        new_id = str(rows[0]["deposit_id"])
+        self.assertEqual(len(new_id), 32)
+        self.assertNotEqual(new_id, "1")
+        # 旧整型列已不存在
+        cols = db.query_all("PRAGMA table_info(player_fixed_deposit)")
+        id_type = next(
+            str(c.get("type") or "").upper()
+            for c in cols
+            if c.get("name") == "deposit_id"
+        )
+        self.assertEqual(id_type, "TEXT")
+
+    def test_take_by_uuid_and_reject_wrong_owner(self):
+        db, econ = self._make_economy()
+        econ.init_fixed_deposit_table()
+        econ.create_fixed_deposit("xuid_a", 80.0, 1)
+        row = econ.list_fixed_deposits_by_xuid("xuid_a")[0]
+        self.assertIsNone(econ.take_fixed_deposit(row["deposit_id"], "xuid_b"))
+        taken = econ.take_fixed_deposit(row["deposit_id"], "xuid_a")
+        self.assertIsNotNone(taken)
+        self.assertEqual(taken["amount"], 80.0)
+        self.assertEqual(econ.list_fixed_deposits_by_xuid("xuid_a"), [])
+
+    def test_sync_whitelist_contains_deposit(self):
+        from tests.test_mail_system import sync_write  # 复用已加载模块
+
+        self.assertEqual(
+            sync_write.SYNC_TABLE_PRIMARY_KEYS.get("player_fixed_deposit"),
+            ("deposit_id",),
+        )
 
 
 if __name__ == "__main__":

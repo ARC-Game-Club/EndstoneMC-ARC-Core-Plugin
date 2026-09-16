@@ -18,7 +18,7 @@ DATABASE_PATH=ARCCore.db
 #
 # 【全服规则 [全服]】仅同步中心（ENABLE_SYNC_SERVER=True）可改；从服只读，连接后按
 # 已开启的数据开关下发并覆盖本机 yml。OP 面板中带 [全服] 标记：
-#   经济（需 SYNC_CLIENT_SYNC_ECONOMY）：PLAYER_INIT_MONEY_NUM、HIDE_OP_IN_MONEY_RANKING、RICHEST_TITLE_NAME
+#   经济（需 SYNC_CLIENT_SYNC_ECONOMY）：PLAYER_INIT_MONEY_NUM、HIDE_OP_IN_MONEY_RANKING、RICHEST_TITLE_NAME、FIXED_DEPOSIT_MONTHLY_RATE
 #   头衔（需 SYNC_CLIENT_SYNC_TITLE）：DEFAULT_TITLE、OP_TITLE
 #   公会（需 SYNC_CLIENT_SYNC_GUILD）：GUILD_CREATE_COST、GUILD_RENAME_COST、GUILD_UPGRADE_*、GUILD_SIZE_*
 #
@@ -56,11 +56,16 @@ CONDITIONAL_TITLE_AUTHORITY=
 # 强制登录（为 True 时，玩家进入游戏强制打开 /arc 菜单登录或注册；关闭登录/注册界面且未正确输入密码时会再次强制打开）
 FORCE_LOGIN=True
 
-# 玩家经济 [全服]：新号初始存款、排行榜隐藏 OP、首富头衔名（从服只读；需 SYNC_CLIENT_SYNC_ECONOMY）
+# 玩家经济 [全服]：新号初始存款、排行榜隐藏 OP、首富头衔名、定期存款月利率（从服只读；需 SYNC_CLIENT_SYNC_ECONOMY）
 # 也可在 OP 面板 → 配置文件设置 → 经济 中修改（同步中心上可改，从服只读）
 PLAYER_INIT_MONEY_NUM=2000
 HIDE_OP_IN_MONEY_RANKING=True
 RICHEST_TITLE_NAME=首富
+
+# 定期存款：按月复利，30 天记 1 个月；存期档位 1/3/6/12 个月；到期前支取仅返还本金，到期后利息封顶
+# 月利率为百分比数值（5 = 5%，[全服] 需 SYNC_CLIENT_SYNC_ECONOMY）；启用开关为 [本服] 各服独立
+FIXED_DEPOSIT_MONTHLY_RATE=5
+ENABLE_FIXED_DEPOSIT=True
 
 # 出生点保护
 IF_PROTECT_SPAWN=False

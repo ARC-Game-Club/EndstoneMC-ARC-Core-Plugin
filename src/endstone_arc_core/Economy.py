@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """经济系统逻辑：金钱存储、增减、排行等（基于 XUID，精确到分）"""
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 
 class Economy:
     """经济系统：负责 player_economy 表及金钱相关数据逻辑，不包含 UI 与通知。"""
+
+    # 定期存款：30 天记 1 个月，按月复利；到期前支取仅返还本金，到期后利息封顶（不自动续存）
+    FIXED_DEPOSIT_TABLE = "player_fixed_deposit"
+    MONTH_SECONDS = 30 * 24 * 3600
+    FIXED_DEPOSIT_TERM_CHOICES = (1, 3, 6, 12)
+    DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE = 5.0
 
     def __init__(self, database_manager, setting_manager, logger=None):
         self.db = database_manager
@@ -295,3 +302,164 @@ class Economy:
             self._log("error", f"[ARC Core]Get all money data error: {str(e)}")
             self._emit_persistent_error("BANK08", f"get_all_money_raw: {e}", e)
             return []
+
+    # ------------------------------------------------------------------
+    # 定期存款
+    # ------------------------------------------------------------------
+
+    def init_fixed_deposit_table(self) -> bool:
+        """初始化定期存款表：每张存单一行，支取即删行，存在即视为存单生效中"""
+        fields = {
+            "deposit_id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+            "xuid": "TEXT NOT NULL",
+            "amount": "REAL NOT NULL",
+            "start_ts": "REAL NOT NULL",
+            "term_months": "INTEGER NOT NULL",
+        }
+        return self.db.create_table(self.FIXED_DEPOSIT_TABLE, fields)
+
+    def get_fixed_deposit_monthly_rate(self) -> float:
+        """读取定期存款月利率（百分比数值，如 5 = 5%）；缺省/非法回退默认值"""
+        raw = self.setting_manager.GetSetting("FIXED_DEPOSIT_MONTHLY_RATE")
+        try:
+            rate = float(raw)
+        except (ValueError, TypeError):
+            return self.DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE
+        return max(0.0, rate)
+
+    @staticmethod
+    def compute_fixed_deposit_payout(
+        amount: float,
+        term_months: int,
+        monthly_rate: float,
+        start_ts: float,
+        now_ts: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """按月复利计算存单状态与当前可支取金额（纯计算，无 IO）。
+
+        - 30 天记 1 个月，只按完整月计息，不足整月部分不计息；
+        - 利息封顶于存期结束（到期后不自动续存，金额保持到支取）；
+        - 未到期支取仅返还本金（payout = amount，interest = 0）；
+        - monthly_rate 为百分比数值（5 = 5%），负值按 0 处理。
+        """
+        now_ts = time.time() if now_ts is None else float(now_ts)
+        amount = max(0.0, float(amount))
+        term_months = max(1, int(term_months))
+        rate = max(0.0, float(monthly_rate)) / 100.0
+        start_ts = float(start_ts)
+
+        elapsed = now_ts - start_ts
+        months_elapsed = max(0, int(elapsed // Economy.MONTH_SECONDS))
+        matured = months_elapsed >= term_months
+        if matured:
+            payout = amount * ((1.0 + rate) ** term_months)
+            months_counted = term_months
+        else:
+            payout = amount
+            months_counted = months_elapsed
+        remaining_seconds = max(0, int(term_months * Economy.MONTH_SECONDS - elapsed))
+        return {
+            "matured": matured,
+            "months_elapsed": months_elapsed,
+            "months_counted": months_counted,
+            "payout": Economy.round_money(payout),
+            "interest": Economy.round_money(payout - amount),
+            "remaining_seconds": remaining_seconds,
+        }
+
+    def create_fixed_deposit(self, xuid: str, amount: float, term_months: int) -> bool:
+        """新建一张定期存单（调用方需先自行扣减余额）"""
+        try:
+            return self.db.insert(
+                self.FIXED_DEPOSIT_TABLE,
+                {
+                    "xuid": str(xuid),
+                    "amount": self.round_money(amount),
+                    "start_ts": float(time.time()),
+                    "term_months": int(term_months),
+                },
+            )
+        except Exception as e:
+            self._log("error", f"[ARC Core]Create fixed deposit error: {str(e)}")
+            self._emit_persistent_error(
+                "BANK18",
+                f"create_fixed_deposit xuid={xuid!r} amount={amount} term={term_months}: {e}",
+                e,
+            )
+            return False
+
+    def restore_fixed_deposit(
+        self, xuid: str, amount: float, start_ts: float, term_months: int
+    ) -> bool:
+        """按原存入时间回插一张存单（仅用于支取入账失败后的回滚）"""
+        try:
+            return self.db.insert(
+                self.FIXED_DEPOSIT_TABLE,
+                {
+                    "xuid": str(xuid),
+                    "amount": self.round_money(amount),
+                    "start_ts": float(start_ts),
+                    "term_months": int(term_months),
+                },
+            )
+        except Exception as e:
+            self._log("error", f"[ARC Core]Restore fixed deposit error: {str(e)}")
+            self._emit_persistent_error(
+                "BANK19",
+                f"restore_fixed_deposit xuid={xuid!r} amount={amount} start_ts={start_ts}: {e}",
+                e,
+            )
+            return False
+
+    def list_fixed_deposits_by_xuid(self, xuid: str) -> List[Dict[str, Any]]:
+        """列出玩家全部生效中的存单（按存入时间升序）"""
+        try:
+            return self.db.query_all(
+                f"SELECT * FROM {self.FIXED_DEPOSIT_TABLE} WHERE xuid = ? ORDER BY start_ts ASC",
+                (str(xuid),),
+            )
+        except Exception as e:
+            self._log("error", f"[ARC Core]List fixed deposits error: {str(e)}")
+            self._emit_persistent_error(
+                "BANK20", f"list_fixed_deposits_by_xuid xuid={xuid!r}: {e}", e
+            )
+            return []
+
+    def take_fixed_deposit(self, deposit_id: int, xuid: str) -> Optional[Dict[str, Any]]:
+        """删除并返回一张属于该玩家的存单；不存在 / 不属于该玩家 / 删除失败返回 None"""
+        try:
+            row = self.db.query_one(
+                f"SELECT * FROM {self.FIXED_DEPOSIT_TABLE} WHERE deposit_id = ? AND xuid = ?",
+                (int(deposit_id), str(xuid)),
+            )
+            if row is None:
+                return None
+            ok = self.db.delete(
+                self.FIXED_DEPOSIT_TABLE, "deposit_id = ?", (int(deposit_id),)
+            )
+            return row if ok else None
+        except Exception as e:
+            self._log("error", f"[ARC Core]Take fixed deposit error: {str(e)}")
+            self._emit_persistent_error(
+                "BANK21",
+                f"take_fixed_deposit deposit_id={deposit_id!r} xuid={xuid!r}: {e}",
+                e,
+            )
+            return None
+
+    def count_matured_fixed_deposits_by_xuid(self, xuid: str) -> int:
+        """统计玩家已到期、尚未支取的存单数量（进服提醒用）"""
+        rate = self.get_fixed_deposit_monthly_rate()
+        now_ts = time.time()
+        count = 0
+        for row in self.list_fixed_deposits_by_xuid(xuid):
+            state = self.compute_fixed_deposit_payout(
+                row.get("amount", 0.0),
+                row.get("term_months", 1),
+                rate,
+                row.get("start_ts", now_ts),
+                now_ts=now_ts,
+            )
+            if state["matured"]:
+                count += 1
+        return count

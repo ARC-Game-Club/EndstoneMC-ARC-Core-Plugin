@@ -21,7 +21,7 @@ pip install build && python -m build
 
 To install into a server: copy the `.whl` into the EndStone server's environment and `pip install` it, then restart the server. The plugin auto-creates `plugins/ARCCore/` with config files and SQLite database on first load.
 
-There are **no tests** in this repository — no test runner, no test files.
+Tests live in `tests/` (plain `unittest`, no external deps): run with `python -m unittest discover -s tests`. They exercise pure logic (sync config routing/protocol, DB routing, sky-eye query, deposit settlement math) without an EndStone server.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ There are **no tests** in this repository — no test runner, no test files.
 |---|---|
 | `arc_core_plugin.py` | Main plugin class: event handlers (`on_player_join`, `on_block_break`, etc.), all form/UI builders (main menu, OP panel, sub-menus), command dispatch, position-check thread, API methods exposed to other plugins |
 | `DatabaseManager.py` | Thread-safe SQLite wrapper with table-level routing (for cross-server DB splitting). Provides `execute`, `query_one`, `query_all`, `insert`, `update`, `delete`, `create_table` |
-| `Economy.py` | Balance CRUD, transfer logic, richest-player tracking |
+| `Economy.py` | Balance CRUD, transfer logic, richest-player tracking, fixed deposits (monthly compound interest, 30 days = 1 month, settlement math in `compute_fixed_deposit_payout`) |
 | `LandSystem.py` | Land claim creation, overlap detection, chunk-index lookup, protection enforcement, sub-lands, land sales with VAT |
 | `TeleportSystem.py` | Home/warp/TPA/random/death/cross-server teleport; `generate_tp_command_to_position()` helper |
 | `GuildSystem.py` | Guild CRUD, membership, invites, contribution points, size tiers, join approval |

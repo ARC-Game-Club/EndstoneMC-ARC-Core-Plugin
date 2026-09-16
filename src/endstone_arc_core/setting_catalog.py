@@ -120,6 +120,8 @@ SETTING_GROUPS: List[Dict[str, object]] = [
             _s("PLAYER_INIT_MONEY_NUM", "[全服] 新玩家初始存款", "float", placeholder="2000"),
             _s("HIDE_OP_IN_MONEY_RANKING", "[全服] 排行榜隐藏 OP", "bool", choices=BOOL_CHOICES),
             _s("RICHEST_TITLE_NAME", "[全服] 首富头衔名", "string", placeholder="首富"),
+            _s("FIXED_DEPOSIT_MONTHLY_RATE", "[全服] 定期存款月利率（%）", "float", placeholder="5"),
+            _s("ENABLE_FIXED_DEPOSIT", "[本服] 启用定期存款", "bool", choices=BOOL_CHOICES),
         ],
     },
     {

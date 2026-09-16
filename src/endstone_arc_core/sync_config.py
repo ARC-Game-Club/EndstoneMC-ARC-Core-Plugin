@@ -15,7 +15,7 @@ SYNC_CATEGORY_SETTING_KEYS: Dict[str, str] = {
 # 同步类别 -> 数据表（与 sync_protocol.TABLE_TO_ENUM 一致）
 SYNC_CATEGORY_TABLES: Dict[str, List[str]] = {
     "player": ["player_basic_info"],
-    "economy": ["player_economy"],
+    "economy": ["player_economy", "player_fixed_deposit"],
     "title": [
         "title_definitions",
         "player_title_unlock_time",
@@ -32,6 +32,7 @@ SYNC_CATEGORY_SHARED_SETTINGS: Dict[str, Tuple[str, ...]] = {
         "PLAYER_INIT_MONEY_NUM",
         "HIDE_OP_IN_MONEY_RANKING",
         "RICHEST_TITLE_NAME",
+        "FIXED_DEPOSIT_MONTHLY_RATE",
     ),
     "title": (
         "DEFAULT_TITLE",

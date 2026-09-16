@@ -49,7 +49,7 @@ class SyncTable(IntEnum):
     GUILD = 0x10                  # 公会信息
     GUILD_MEMBERS = 0x11          # 公会成员
     GUILD_INVITES = 0x12          # 公会邀请
-
+    PLAYER_FIXED_DEPOSIT = 0x13   # 玩家定期存款存单
 
 # 表名到枚举的映射
 TABLE_TO_ENUM = {
@@ -62,6 +62,7 @@ TABLE_TO_ENUM = {
     'guilds': SyncTable.GUILD,
     'guild_members': SyncTable.GUILD_MEMBERS,
     'guild_invites': SyncTable.GUILD_INVITES,
+    'player_fixed_deposit': SyncTable.PLAYER_FIXED_DEPOSIT,
 }
 
 ENUM_TO_TABLE = {v: k for k, v in TABLE_TO_ENUM.items()}

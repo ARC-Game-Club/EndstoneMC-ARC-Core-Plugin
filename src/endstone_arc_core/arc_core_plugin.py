@@ -1169,6 +1169,25 @@ class ARCCorePlugin(Plugin):
                 self.logger.error(
                     f"{ColorFormat.RED}[ARC Core]Check pending invite rewards on join error: {str(e)}"
                 )
+            try:
+                if self._is_fixed_deposit_enabled():
+                    matured_count = self.economy.count_matured_fixed_deposits_by_xuid(
+                        str(p.xuid)
+                    )
+                    if matured_count > 0:
+                        self._notify_important(
+                            p,
+                            self.language_manager.GetText(
+                                'FIXED_DEPOSIT_MATURED_JOIN_NOTIFY'
+                            ).format(matured_count),
+                            title=self._toast_title(
+                                "FIXED_DEPOSIT_WITHDRAW_TOAST_TITLE", "定期存款"
+                            ),
+                        )
+            except Exception as e:
+                self.logger.error(
+                    f"{ColorFormat.RED}[ARC Core]Check matured fixed deposits on join error: {str(e)}"
+                )
 
         def _join_sky_eye(p):
             try:
@@ -3504,6 +3523,7 @@ class ARCCorePlugin(Plugin):
         self.init_cross_server_table()
         self.economy.init_economy_table()
         self.economy.upgrade_player_economy_table_to_float()
+        self.economy.init_fixed_deposit_table()
         self.land_system.init_land_tables()
         self.land_system.init_sub_land_table()
         self.teleport_system.init_teleport_tables()
@@ -7742,6 +7762,12 @@ class ARCCorePlugin(Plugin):
             icon=self._ui_icon(ui_icons.TRANSFER),
             on_click=self.show_transfer_panel,
         )
+        if self._is_fixed_deposit_enabled():
+            bank_main_menu.add_button(
+                self.language_manager.GetText('BANK_MAIN_MENU_FIXED_DEPOSIT_BUTTON_TEXT'),
+                icon=self._ui_icon(ui_icons.BANK),
+                on_click=self.show_fixed_deposit_menu,
+            )
         bank_main_menu.add_button(
             self.language_manager.GetText('BANK_MAIN_MENU_MONEY_RANK_BUTTON_TEXT'),
             icon=self._ui_icon(ui_icons.MONEY_RANK),
@@ -7888,6 +7914,377 @@ class ARCCorePlugin(Plugin):
             on_submit=try_transfer
         )
         player.send_form(transfer_panel)
+
+    # ------------------------------------------------------------------
+    # 定期存款（按月复利；30 天 = 1 个月；到期前支取仅返还本金）
+    # ------------------------------------------------------------------
+
+    def _is_fixed_deposit_enabled(self) -> bool:
+        """ENABLE_FIXED_DEPOSIT 缺省/为空视为开启。"""
+        raw = self.setting_manager.get_existing("ENABLE_FIXED_DEPOSIT")
+        if raw is None or not str(raw).strip():
+            return True
+        return str(raw).strip().lower() not in ("0", "false", "off", "no", "否", "关闭")
+
+    def _fixed_deposit_rate_display(self) -> str:
+        """月利率显示文本：5.0 → '5'，2.5 → '2.5'。"""
+        return "%g" % self.economy.get_fixed_deposit_monthly_rate()
+
+    @staticmethod
+    def _format_ts_display(ts: float) -> str:
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+
+    def _open_fixed_deposit_result(
+        self, player: Player, content: str, back: Callable[[Player], None]
+    ) -> None:
+        """定期存款通用结果页：内容 + 返回按钮。"""
+        result_form = ActionForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_RESULT_PANEL_TITLE'),
+            content=content,
+            on_close=None,
+        )
+        result_form.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            on_click=back,
+        )
+        player.send_form(result_form)
+
+    def show_fixed_deposit_menu(self, player: Player):
+        menu = ActionForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_MENU_TITLE'),
+            content=self.language_manager.GetText('FIXED_DEPOSIT_MENU_CONTENT').format(
+                self._format_money_display(self.get_player_money(player)),
+                self._fixed_deposit_rate_display(),
+            )
+        )
+        menu.add_button(
+            self.language_manager.GetText('FIXED_DEPOSIT_CREATE_BUTTON_TEXT'),
+            on_click=self.show_fixed_deposit_create_panel,
+        )
+        menu.add_button(
+            self.language_manager.GetText('FIXED_DEPOSIT_LIST_BUTTON_TEXT'),
+            on_click=self.show_fixed_deposit_list,
+        )
+        menu.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            icon=self._ui_icon(ui_icons.BACK),
+            on_click=self.show_bank_main_menu,
+        )
+        player.send_form(menu)
+
+    def show_fixed_deposit_create_panel(self, player: Player):
+        """存入定期：金额 + 存期档位（选项内附到期本息预估）"""
+        rate = self.economy.get_fixed_deposit_monthly_rate()
+        terms = list(Economy.FIXED_DEPOSIT_TERM_CHOICES)
+        info_label = Label(
+            text=self.language_manager.GetText('FIXED_DEPOSIT_CREATE_INFO_LABEL').format(
+                self._format_money_display(self.get_player_money(player)),
+                self._fixed_deposit_rate_display(),
+            )
+        )
+        amount_input = TextInput(
+            label=self.language_manager.GetText('FIXED_DEPOSIT_AMOUNT_INPUT_LABEL'),
+            placeholder=self.language_manager.GetText('FIXED_DEPOSIT_AMOUNT_INPUT_PLACEHOLDER'),
+            default_value='0'
+        )
+        term_dropdown = Dropdown(
+            label=self.language_manager.GetText('FIXED_DEPOSIT_TERM_DROPDOWN_LABEL'),
+            options=[
+                self.language_manager.GetText('FIXED_DEPOSIT_TERM_OPTION').format(
+                    term_months,
+                    "%.2f" % self._fixed_deposit_growth_factor(rate, term_months),
+                )
+                for term_months in terms
+            ],
+            default_index=0,
+        )
+
+        def try_deposit(sender: Player, data: list):
+            if self._modal_choice_is_back(data, 0):
+                self.show_fixed_deposit_create_panel(sender)
+                return
+            try:
+                amount = self._round_money(float(data[2]))
+            except (ValueError, TypeError):
+                amount = None
+            if amount is None or amount <= 0:
+                self._open_fixed_deposit_result(
+                    sender,
+                    self.language_manager.GetText('FIXED_DEPOSIT_ERROR_1_TEXT'),
+                    self.show_fixed_deposit_create_panel,
+                )
+                return
+            if not self.judge_if_player_has_enough_money(sender, amount):
+                self._open_fixed_deposit_result(
+                    sender,
+                    self.language_manager.GetText('FIXED_DEPOSIT_ERROR_2_TEXT'),
+                    self.show_fixed_deposit_create_panel,
+                )
+                return
+            try:
+                term_months = terms[int(data[3])]
+            except (ValueError, TypeError, IndexError):
+                term_months = terms[0]
+            if not self.decrease_player_money(sender, amount, notify=False):
+                self.report_arc_error(
+                    "BANK22",
+                    f"fixed deposit decrease failed player={sender.name!r} amount={amount!r}",
+                    sender,
+                )
+                self._open_fixed_deposit_result(
+                    sender,
+                    self.language_manager.GetText('FIXED_DEPOSIT_FAIL_TEXT').format("BANK22"),
+                    self.show_fixed_deposit_menu,
+                )
+                return
+            if not self.economy.create_fixed_deposit(str(sender.xuid), amount, term_months):
+                self.report_arc_error(
+                    "BANK23",
+                    f"fixed deposit insert failed after decrease; attempting rollback "
+                    f"player={sender.name!r} amount={amount!r} term={term_months!r}",
+                    sender,
+                )
+                if not self.increase_player_money(sender, amount, notify=False):
+                    self.report_arc_error(
+                        "BANK24",
+                        f"fixed deposit rollback to balance FAILED player={sender.name!r} "
+                        f"amount={amount!r}",
+                        sender,
+                    )
+                self._open_fixed_deposit_result(
+                    sender,
+                    self.language_manager.GetText('FIXED_DEPOSIT_FAIL_TEXT').format("BANK23"),
+                    self.show_fixed_deposit_menu,
+                )
+                return
+            maturity_ts = time.time() + term_months * Economy.MONTH_SECONDS
+            preview = Economy.compute_fixed_deposit_payout(
+                amount, term_months, rate, time.time(), now_ts=maturity_ts
+            )
+            self._notify_important(
+                sender,
+                self.language_manager.GetText('FIXED_DEPOSIT_SUCCESS_TEXT').format(
+                    self._format_money_display(amount),
+                    term_months,
+                    self._format_ts_display(maturity_ts),
+                    self._format_money_display(preview["payout"]),
+                ),
+                title=self._toast_title("FIXED_DEPOSIT_WITHDRAW_TOAST_TITLE", "定期存款"),
+            )
+            self.show_fixed_deposit_menu(sender)
+
+        deposit_panel = ModalForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_CREATE_PANEL_TITLE'),
+            controls=[self._modal_nav_dropdown(), info_label, amount_input, term_dropdown],
+            on_close=None,
+            on_submit=try_deposit
+        )
+        player.send_form(deposit_panel)
+
+    @staticmethod
+    def _fixed_deposit_growth_factor(rate: float, term_months: int) -> float:
+        """到期本息 / 本金 的复利倍数（仅用于档位选项文案，如 5% 月利率 12 个月 → 1.80）。"""
+        state = Economy.compute_fixed_deposit_payout(
+            1.0,
+            term_months,
+            rate,
+            time.time(),
+            now_ts=time.time() + term_months * Economy.MONTH_SECONDS,
+        )
+        return state["payout"]
+
+    def show_fixed_deposit_list(self, player: Player):
+        rows = self.economy.list_fixed_deposits_by_xuid(str(player.xuid))
+        rate = self.economy.get_fixed_deposit_monthly_rate()
+        now_ts = time.time()
+        list_panel = ActionForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_LIST_PANEL_TITLE'),
+            content=self.language_manager.GetText('FIXED_DEPOSIT_LIST_EMPTY_TEXT')
+            if not rows
+            else "",
+            on_close=None,
+        )
+        for row in rows:
+            state = Economy.compute_fixed_deposit_payout(
+                row.get("amount", 0.0),
+                row.get("term_months", 1),
+                rate,
+                row.get("start_ts", now_ts),
+                now_ts=now_ts,
+            )
+            deposit_id = row.get("deposit_id")
+            if state["matured"]:
+                button_text = self.language_manager.GetText(
+                    'FIXED_DEPOSIT_LIST_ITEM_MATURED'
+                ).format(deposit_id, self._format_money_display(state["payout"]))
+            else:
+                remaining_days = max(1, math.ceil(state["remaining_seconds"] / 86400))
+                button_text = self.language_manager.GetText(
+                    'FIXED_DEPOSIT_LIST_ITEM_ACTIVE'
+                ).format(
+                    deposit_id,
+                    self._format_money_display(row.get("amount", 0.0)),
+                    row.get("term_months", 1),
+                    remaining_days,
+                )
+            list_panel.add_button(
+                button_text,
+                on_click=lambda sender, rid=deposit_id: self.show_fixed_deposit_detail(sender, rid),
+            )
+        if rows:
+            list_panel.add_button(
+                self.language_manager.GetText('FIXED_DEPOSIT_CREATE_BUTTON_TEXT'),
+                on_click=self.show_fixed_deposit_create_panel,
+            )
+        list_panel.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            on_click=self.show_fixed_deposit_menu,
+        )
+        player.send_form(list_panel)
+
+    def show_fixed_deposit_detail(self, player: Player, deposit_id: int):
+        row = next(
+            (
+                r
+                for r in self.economy.list_fixed_deposits_by_xuid(str(player.xuid))
+                if r.get("deposit_id") == deposit_id
+            ),
+            None,
+        )
+        if row is None:
+            self._open_fixed_deposit_result(
+                player,
+                self.language_manager.GetText('FIXED_DEPOSIT_STALE_HINT_TEXT'),
+                self.show_fixed_deposit_list,
+            )
+            return
+        rate = self.economy.get_fixed_deposit_monthly_rate()
+        amount = self._round_money(row.get("amount", 0.0))
+        term_months = int(row.get("term_months", 1))
+        start_ts = float(row.get("start_ts", time.time()))
+        state = Economy.compute_fixed_deposit_payout(
+            amount, term_months, rate, start_ts
+        )
+        maturity_ts = start_ts + term_months * Economy.MONTH_SECONDS
+        if state["matured"]:
+            status_line = self.language_manager.GetText(
+                'FIXED_DEPOSIT_DETAIL_MATURED_STATUS'
+            ).format(
+                self._format_money_display(state["payout"]),
+                self._format_money_display(state["interest"]),
+            )
+        else:
+            remaining_days = max(1, math.ceil(state["remaining_seconds"] / 86400))
+            status_line = self.language_manager.GetText(
+                'FIXED_DEPOSIT_DETAIL_ACTIVE_STATUS'
+            ).format(
+                state["months_elapsed"],
+                self._format_money_display(state["payout"]),
+                remaining_days,
+            )
+        detail_panel = ActionForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_DETAIL_PANEL_TITLE'),
+            content=self.language_manager.GetText('FIXED_DEPOSIT_DETAIL_CONTENT').format(
+                deposit_id,
+                self._format_money_display(amount),
+                term_months,
+                self._fixed_deposit_rate_display(),
+                self._format_ts_display(start_ts),
+                self._format_ts_display(maturity_ts),
+                status_line,
+            ),
+            on_close=None,
+        )
+        if state["matured"]:
+            detail_panel.add_button(
+                self.language_manager.GetText('FIXED_DEPOSIT_WITHDRAW_MATURED_BUTTON').format(
+                    self._format_money_display(state["payout"])
+                ),
+                on_click=lambda sender: self._withdraw_fixed_deposit(sender, row, early=False),
+            )
+        else:
+            detail_panel.add_button(
+                self.language_manager.GetText('FIXED_DEPOSIT_WITHDRAW_EARLY_BUTTON').format(
+                    self._format_money_display(amount)
+                ),
+                on_click=lambda sender: self._confirm_fixed_deposit_early_withdraw(sender, row),
+            )
+        detail_panel.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            on_click=self.show_fixed_deposit_list,
+        )
+        player.send_form(detail_panel)
+
+    def _confirm_fixed_deposit_early_withdraw(self, player: Player, row: Dict[str, Any]):
+        confirm_panel = ActionForm(
+            title=self.language_manager.GetText('FIXED_DEPOSIT_EARLY_CONFIRM_TITLE'),
+            content=self.language_manager.GetText('FIXED_DEPOSIT_EARLY_CONFIRM_CONTENT').format(
+                row.get("deposit_id"),
+                self._format_money_display(row.get("amount", 0.0)),
+            ),
+            on_close=None,
+        )
+        confirm_panel.add_button(
+            self.language_manager.GetText('FIXED_DEPOSIT_EARLY_CONFIRM_YES'),
+            on_click=lambda sender: self._withdraw_fixed_deposit(sender, row, early=True),
+        )
+        confirm_panel.add_button(
+            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
+            on_click=lambda sender: self.show_fixed_deposit_detail(
+                sender, row.get("deposit_id")
+            ),
+        )
+        player.send_form(confirm_panel)
+
+    def _withdraw_fixed_deposit(self, player: Player, row: Dict[str, Any], *, early: bool):
+        """支取存单：先删行（锁存单），入账失败则按原 start_ts 回插存单。"""
+        xuid = str(player.xuid)
+        deposit_id = row.get("deposit_id")
+        amount = self._round_money(row.get("amount", 0.0))
+        term_months = int(row.get("term_months", 1))
+        start_ts = float(row.get("start_ts", time.time()))
+        rate = self.economy.get_fixed_deposit_monthly_rate()
+        state = Economy.compute_fixed_deposit_payout(
+            amount, term_months, rate, start_ts
+        )
+        payout = amount if early else state["payout"]
+        if self.economy.take_fixed_deposit(deposit_id, xuid) is None:
+            self._open_fixed_deposit_result(
+                player,
+                self.language_manager.GetText('FIXED_DEPOSIT_STALE_HINT_TEXT'),
+                self.show_fixed_deposit_list,
+            )
+            return
+        if not self.increase_player_money_by_xuid(xuid, payout, notify=False):
+            self.report_arc_error(
+                "BANK25",
+                f"fixed deposit credit failed after delete; restoring deposit "
+                f"player={player.name!r} deposit_id={deposit_id!r} payout={payout!r}",
+                player,
+            )
+            if not self.economy.restore_fixed_deposit(xuid, amount, start_ts, term_months):
+                self.report_arc_error(
+                    "BANK26",
+                    f"fixed deposit restore FAILED after credit failure; deposit lost "
+                    f"player={player.name!r} deposit_id={deposit_id!r} "
+                    f"amount={amount!r} start_ts={start_ts!r} term={term_months!r}",
+                    player,
+                )
+            self._open_fixed_deposit_result(
+                player,
+                self.language_manager.GetText('FIXED_DEPOSIT_FAIL_TEXT').format("BANK25"),
+                self.show_fixed_deposit_list,
+            )
+            return
+        self._notify_important(
+            player,
+            self.language_manager.GetText('FIXED_DEPOSIT_WITHDRAW_SUCCESS_TEXT').format(
+                self._format_money_display(payout),
+                self._format_money_display(self.get_player_money(player)),
+            ),
+            title=self._toast_title("FIXED_DEPOSIT_WITHDRAW_TOAST_TITLE", "定期存款"),
+        )
+        self.show_fixed_deposit_list(player)
 
     def show_small_horn_buy_panel(
         self,

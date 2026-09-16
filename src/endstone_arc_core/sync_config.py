@@ -32,7 +32,10 @@ SYNC_CATEGORY_SHARED_SETTINGS: Dict[str, Tuple[str, ...]] = {
         "PLAYER_INIT_MONEY_NUM",
         "HIDE_OP_IN_MONEY_RANKING",
         "RICHEST_TITLE_NAME",
-        "FIXED_DEPOSIT_MONTHLY_RATE",
+        "FIXED_DEPOSIT_RATE_1M",
+        "FIXED_DEPOSIT_RATE_3M",
+        "FIXED_DEPOSIT_RATE_6M",
+        "FIXED_DEPOSIT_RATE_12M",
     ),
     "title": (
         "DEFAULT_TITLE",

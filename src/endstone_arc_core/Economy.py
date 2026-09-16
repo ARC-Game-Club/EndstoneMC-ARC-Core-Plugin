@@ -12,6 +12,13 @@ class Economy:
     MONTH_SECONDS = 30 * 24 * 3600
     FIXED_DEPOSIT_TERM_CHOICES = (1, 3, 6, 12)
     DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE = 5.0
+    # 各档位独立月利率配置键（百分比数值）；缺档时回退旧的统一键 FIXED_DEPOSIT_MONTHLY_RATE
+    FIXED_DEPOSIT_RATE_KEYS = {
+        1: "FIXED_DEPOSIT_RATE_1M",
+        3: "FIXED_DEPOSIT_RATE_3M",
+        6: "FIXED_DEPOSIT_RATE_6M",
+        12: "FIXED_DEPOSIT_RATE_12M",
+    }
 
     def __init__(self, database_manager, setting_manager, logger=None):
         self.db = database_manager
@@ -318,14 +325,26 @@ class Economy:
         }
         return self.db.create_table(self.FIXED_DEPOSIT_TABLE, fields)
 
-    def get_fixed_deposit_monthly_rate(self) -> float:
-        """读取定期存款月利率（百分比数值，如 5 = 5%）；缺省/非法回退默认值"""
-        raw = self.setting_manager.GetSetting("FIXED_DEPOSIT_MONTHLY_RATE")
+    def get_fixed_deposit_monthly_rate(self, term_months: int) -> float:
+        """读取指定档位的定期存款月利率（百分比数值，如 5 = 5%）。
+
+        按存期档位取 FIXED_DEPOSIT_RATE_1M/3M/6M/12M；该档缺省或非法时
+        回退旧的统一键 FIXED_DEPOSIT_MONTHLY_RATE，再回退默认值。
+        """
+        key = self.FIXED_DEPOSIT_RATE_KEYS.get(int(term_months))
+        if key:
+            raw = self.setting_manager.GetSetting(key)
+            try:
+                return max(0.0, float(raw))
+            except (ValueError, TypeError):
+                pass
         try:
-            rate = float(raw)
+            return max(
+                0.0,
+                float(self.setting_manager.GetSetting("FIXED_DEPOSIT_MONTHLY_RATE")),
+            )
         except (ValueError, TypeError):
             return self.DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE
-        return max(0.0, rate)
 
     @staticmethod
     def compute_fixed_deposit_payout(
@@ -449,13 +468,14 @@ class Economy:
 
     def count_matured_fixed_deposits_by_xuid(self, xuid: str) -> int:
         """统计玩家已到期、尚未支取的存单数量（进服提醒用）"""
-        rate = self.get_fixed_deposit_monthly_rate()
         now_ts = time.time()
         count = 0
         for row in self.list_fixed_deposits_by_xuid(xuid):
+            term_months = int(row.get("term_months", 1))
+            rate = self.get_fixed_deposit_monthly_rate(term_months)
             state = self.compute_fixed_deposit_payout(
                 row.get("amount", 0.0),
-                row.get("term_months", 1),
+                term_months,
                 rate,
                 row.get("start_ts", now_ts),
                 now_ts=now_ts,

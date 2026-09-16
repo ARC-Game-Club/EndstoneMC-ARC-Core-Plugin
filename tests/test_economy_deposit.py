@@ -75,27 +75,44 @@ class FixedDepositPayoutTests(unittest.TestCase):
 
 
 class FixedDepositRateSettingTests(unittest.TestCase):
-    def _economy(self, raw):
-        return economy_mod.Economy(None, _FakeSettings({"FIXED_DEPOSIT_MONTHLY_RATE": raw}))
+    def _economy(self, data):
+        return economy_mod.Economy(None, _FakeSettings(data))
 
-    def test_default_when_missing(self):
-        self.assertEqual(
-            economy_mod.Economy(None, _FakeSettings({})).get_fixed_deposit_monthly_rate(),
-            Economy.DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE,
+    def test_each_term_has_own_rate(self):
+        e = self._economy(
+            {
+                "FIXED_DEPOSIT_RATE_1M": "5",
+                "FIXED_DEPOSIT_RATE_3M": "6",
+                "FIXED_DEPOSIT_RATE_6M": "7",
+                "FIXED_DEPOSIT_RATE_12M": "8",
+            }
         )
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(1), 5.0)
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(3), 6.0)
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(6), 7.0)
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(12), 8.0)
 
-    def test_valid_percent_value(self):
-        self.assertEqual(self._economy("5").get_fixed_deposit_monthly_rate(), 5.0)
-        self.assertEqual(self._economy("2.5").get_fixed_deposit_monthly_rate(), 2.5)
+    def test_fallback_to_legacy_flat_rate(self):
+        e = self._economy({"FIXED_DEPOSIT_MONTHLY_RATE": "3.5"})
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(6), 3.5)
 
-    def test_invalid_falls_back_to_default(self):
+    def test_invalid_tier_falls_back_to_legacy(self):
+        e = self._economy(
+            {"FIXED_DEPOSIT_RATE_3M": "abc", "FIXED_DEPOSIT_MONTHLY_RATE": "2"}
+        )
+        self.assertEqual(e.get_fixed_deposit_monthly_rate(3), 2.0)
+
+    def test_missing_everything_falls_back_to_default(self):
         self.assertEqual(
-            self._economy("abc").get_fixed_deposit_monthly_rate(),
+            self._economy({}).get_fixed_deposit_monthly_rate(12),
             Economy.DEFAULT_FIXED_DEPOSIT_MONTHLY_RATE,
         )
 
     def test_negative_clamped_to_zero(self):
-        self.assertEqual(self._economy("-3").get_fixed_deposit_monthly_rate(), 0.0)
+        self.assertEqual(
+            self._economy({"FIXED_DEPOSIT_RATE_1M": "-3"}).get_fixed_deposit_monthly_rate(1),
+            0.0,
+        )
 
 
 class FixedDepositTermChoicesTests(unittest.TestCase):

@@ -332,15 +332,15 @@ TRANSFER_NO_ONLINE_PLAYERS_TEXT=当前没有其他在线玩家可以转账
 TRANSFER_SELECT_PLAYER_CONTENT=请选择要转账的玩家 - 您的当前余额: {0}
 BANK_MAIN_MENU_FIXED_DEPOSIT_BUTTON_TEXT=定期存款
 FIXED_DEPOSIT_MENU_TITLE=银行-定期存款
-FIXED_DEPOSIT_MENU_CONTENT=当前余额：{0} 元\n月利率：{1}%（按月复利，30天=1个月）\n存期档位：1 / 3 / 6 / 12 个月\n未到期支取仅返还本金，到期后利息封顶
+FIXED_DEPOSIT_MENU_CONTENT=当前余额：{0} 元\n各档月利率（按月复利，30天=1个月）：\n1个月：{1}%　3个月：{2}%\n6个月：{3}%　12个月：{4}%\n未到期支取仅返还本金，到期后利息封顶
 FIXED_DEPOSIT_CREATE_BUTTON_TEXT=存入定期
 FIXED_DEPOSIT_LIST_BUTTON_TEXT=我的存单
 FIXED_DEPOSIT_CREATE_PANEL_TITLE=银行-存入定期
-FIXED_DEPOSIT_CREATE_INFO_LABEL=当前余额：{0} 元\n月利率：{1}%（按月复利）\n请输入存入金额并选择存期：
+FIXED_DEPOSIT_CREATE_INFO_LABEL=当前余额：{0} 元\n各档月利率与到期倍数见下方选项（按月复利）\n请输入存入金额并选择存期：
 FIXED_DEPOSIT_AMOUNT_INPUT_LABEL=存入金额
 FIXED_DEPOSIT_AMOUNT_INPUT_PLACEHOLDER=请输入金额（正数）
 FIXED_DEPOSIT_TERM_DROPDOWN_LABEL=存期档位（×后为到期本息/本金的倍数）
-FIXED_DEPOSIT_TERM_OPTION={0} 个月（×{1}）
+FIXED_DEPOSIT_TERM_OPTION={0} 个月（月利率 {1}%，×{2}）
 FIXED_DEPOSIT_SUCCESS_TEXT=存入成功！本金 {0} 元，存期 {1} 个月，{2} 到期，到期本息约 {3} 元
 FIXED_DEPOSIT_FAIL_TEXT=[弧光核心]操作未完成（错误代码：{0}）。详情已写入 error_log.txt，请联系管理员。
 FIXED_DEPOSIT_ERROR_1_TEXT=存入金额必须为大于 0 的数字

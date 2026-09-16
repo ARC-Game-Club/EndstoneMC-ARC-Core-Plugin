@@ -7926,9 +7926,16 @@ class ARCCorePlugin(Plugin):
             return True
         return str(raw).strip().lower() not in ("0", "false", "off", "no", "否", "关闭")
 
-    def _fixed_deposit_rate_display(self) -> str:
-        """月利率显示文本：5.0 → '5'，2.5 → '2.5'。"""
-        return "%g" % self.economy.get_fixed_deposit_monthly_rate()
+    @staticmethod
+    def _fmt_rate_display(rate: float) -> str:
+        """利率显示文本：5.0 → '5'，2.5 → '2.5'。"""
+        return "%g" % rate
+
+    def _fixed_deposit_rate_display(self, term_months: int) -> str:
+        """指定档位的月利率显示文本。"""
+        return self._fmt_rate_display(
+            self.economy.get_fixed_deposit_monthly_rate(term_months)
+        )
 
     @staticmethod
     def _format_ts_display(ts: float) -> str:
@@ -7954,7 +7961,10 @@ class ARCCorePlugin(Plugin):
             title=self.language_manager.GetText('FIXED_DEPOSIT_MENU_TITLE'),
             content=self.language_manager.GetText('FIXED_DEPOSIT_MENU_CONTENT').format(
                 self._format_money_display(self.get_player_money(player)),
-                self._fixed_deposit_rate_display(),
+                self._fixed_deposit_rate_display(1),
+                self._fixed_deposit_rate_display(3),
+                self._fixed_deposit_rate_display(6),
+                self._fixed_deposit_rate_display(12),
             )
         )
         menu.add_button(
@@ -7973,13 +7983,11 @@ class ARCCorePlugin(Plugin):
         player.send_form(menu)
 
     def show_fixed_deposit_create_panel(self, player: Player):
-        """存入定期：金额 + 存期档位（选项内附到期本息预估）"""
-        rate = self.economy.get_fixed_deposit_monthly_rate()
+        """存入定期：金额 + 存期档位（选项内附各档月利率与到期倍数）"""
         terms = list(Economy.FIXED_DEPOSIT_TERM_CHOICES)
         info_label = Label(
             text=self.language_manager.GetText('FIXED_DEPOSIT_CREATE_INFO_LABEL').format(
-                self._format_money_display(self.get_player_money(player)),
-                self._fixed_deposit_rate_display(),
+                self._format_money_display(self.get_player_money(player))
             )
         )
         amount_input = TextInput(
@@ -7992,7 +8000,11 @@ class ARCCorePlugin(Plugin):
             options=[
                 self.language_manager.GetText('FIXED_DEPOSIT_TERM_OPTION').format(
                     term_months,
-                    "%.2f" % self._fixed_deposit_growth_factor(rate, term_months),
+                    self._fixed_deposit_rate_display(term_months),
+                    "%.2f" % self._fixed_deposit_growth_factor(
+                        self.economy.get_fixed_deposit_monthly_rate(term_months),
+                        term_months,
+                    ),
                 )
                 for term_months in terms
             ],
@@ -8059,7 +8071,11 @@ class ARCCorePlugin(Plugin):
                 return
             maturity_ts = time.time() + term_months * Economy.MONTH_SECONDS
             preview = Economy.compute_fixed_deposit_payout(
-                amount, term_months, rate, time.time(), now_ts=maturity_ts
+                amount,
+                term_months,
+                self.economy.get_fixed_deposit_monthly_rate(term_months),
+                time.time(),
+                now_ts=maturity_ts,
             )
             self._notify_important(
                 sender,
@@ -8095,7 +8111,6 @@ class ARCCorePlugin(Plugin):
 
     def show_fixed_deposit_list(self, player: Player):
         rows = self.economy.list_fixed_deposits_by_xuid(str(player.xuid))
-        rate = self.economy.get_fixed_deposit_monthly_rate()
         now_ts = time.time()
         list_panel = ActionForm(
             title=self.language_manager.GetText('FIXED_DEPOSIT_LIST_PANEL_TITLE'),
@@ -8108,7 +8123,7 @@ class ARCCorePlugin(Plugin):
             state = Economy.compute_fixed_deposit_payout(
                 row.get("amount", 0.0),
                 row.get("term_months", 1),
-                rate,
+                self.economy.get_fixed_deposit_monthly_rate(row.get("term_months", 1)),
                 row.get("start_ts", now_ts),
                 now_ts=now_ts,
             )
@@ -8158,10 +8173,10 @@ class ARCCorePlugin(Plugin):
                 self.show_fixed_deposit_list,
             )
             return
-        rate = self.economy.get_fixed_deposit_monthly_rate()
         amount = self._round_money(row.get("amount", 0.0))
         term_months = int(row.get("term_months", 1))
         start_ts = float(row.get("start_ts", time.time()))
+        rate = self.economy.get_fixed_deposit_monthly_rate(term_months)
         state = Economy.compute_fixed_deposit_payout(
             amount, term_months, rate, start_ts
         )
@@ -8188,7 +8203,7 @@ class ARCCorePlugin(Plugin):
                 deposit_id,
                 self._format_money_display(amount),
                 term_months,
-                self._fixed_deposit_rate_display(),
+                self._fmt_rate_display(rate),
                 self._format_ts_display(start_ts),
                 self._format_ts_display(maturity_ts),
                 status_line,
@@ -8243,7 +8258,7 @@ class ARCCorePlugin(Plugin):
         amount = self._round_money(row.get("amount", 0.0))
         term_months = int(row.get("term_months", 1))
         start_ts = float(row.get("start_ts", time.time()))
-        rate = self.economy.get_fixed_deposit_monthly_rate()
+        rate = self.economy.get_fixed_deposit_monthly_rate(term_months)
         state = Economy.compute_fixed_deposit_payout(
             amount, term_months, rate, start_ts
         )

@@ -65,7 +65,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - 完整的货币管理系统，**金钱精确到分**（float 存储，两位小数）
 - 玩家余额存储和查询
 - **两步式转账** - 先选择玩家再输入金额，支持小数金额
-- **定期存款** - 按月复利（30 天记 1 个月），存期档位 1/3/6/12 个月；月利率 `FIXED_DEPOSIT_MONTHLY_RATE` 可配（[全服]，默认 5%），功能开关 `ENABLE_FIXED_DEPOSIT`（[本服]）；未到期支取仅返还本金，到期后利息封顶（不自动续存），进服自动提醒到期存单；存单随 `SYNC_CLIENT_SYNC_ECONOMY` 跨服同步
+- **定期存款** - 按月复利（30 天记 1 个月），存期档位 1/3/6/12 个月，**各档独立月利率** `FIXED_DEPOSIT_RATE_1M/3M/6M/12M` 可配（[全服]，默认 5%），功能开关 `ENABLE_FIXED_DEPOSIT`（[本服]）；未到期支取仅返还本金，到期后利息封顶（不自动续存），进服自动提醒到期存单；存单随 `SYNC_CLIENT_SYNC_ECONOMY` 跨服同步
 - 富豪榜排行系统、管理员金钱操作命令、实时余额变动提醒
 - **财富榜首富头衔** - 配置 `RICHEST_TITLE_NAME`（默认「首富」）、传奇稀有度；金钱变动后自动刷新财富榜第一，首富易主则撤销旧头衔并授予新首富；同分按 xuid 稳定排序；跨服仅主服计算、从服只消费同步头衔；可在 **OP 面板 → 经济管理 → 经济参数配置** 中修改
 
@@ -190,7 +190,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - **主菜单顺序**（自上而下）：重载配置 → **配置文件设置** → **工具** → **经济管理** → 领地管理 → 传送管理 → 成就管理（需安装 `arc_achievement`）→ 签到配置 → 邀请奖励配置 → 头衔管理 → 返回
 - **配置文件设置** - 按分类浏览并修改 `core_setting.yml`：开关/多选用下拉框；逗号分隔列表与签到奖励池为「条目按钮 + 增加新配置」，点进单条可删除。保存后即时写入并刷新缓存（路径/同步类项建议重启）
 - **工具**：切换游戏模式、清除掉落物、记录坐标 1/2、调试模式、执行命令（`@p1`/`@p2`、留空重复上次命令）
-- **经济管理**：**增减在线玩家存款**；**经济参数配置** 写入 `PLAYER_INIT_MONEY_NUM`、`HIDE_OP_IN_MONEY_RANKING`、`RICHEST_TITLE_NAME`、`FIXED_DEPOSIT_MONTHLY_RATE`、`ENABLE_FIXED_DEPOSIT`
+- **经济管理**：**增减在线玩家存款**；**经济参数配置** 写入 `PLAYER_INIT_MONEY_NUM`、`HIDE_OP_IN_MONEY_RANKING`、`RICHEST_TITLE_NAME`、`FIXED_DEPOSIT_RATE_1M/3M/6M/12M`、`ENABLE_FIXED_DEPOSIT`
 - **领地管理**：管理所有领地、管理脚下领地、重建领地区块映射；**公共领地** 详情内可 **重设公共领地范围**（不扣款）
 - **传送管理**：**管理公共传送点**（创建/删除 Warp）；**传送参数配置**（`MAX_PLAYER_HOME_NUM`、随机传送中心/半径、各类传送费用等）
 - **签到配置**：总览展示当前存款/随机条数区间/奖励条目数；存款与随机条数表单（含每日签到公会贡献点）；奖励列表按条目编辑/删除/新增
@@ -357,8 +357,11 @@ HIDE_OP_IN_MONEY_RANKING=True        # 金钱排行榜是否隐藏OP玩家
 # 首富头衔（亦可 OP 经济管理）
 RICHEST_TITLE_NAME=首富
 
-# 定期存款（月利率亦可 OP 经济管理；[全服] 随 SYNC_CLIENT_SYNC_ECONOMY 下发）
-FIXED_DEPOSIT_MONTHLY_RATE=5         # 月利率（%），按月复利，30 天=1 个月
+# 定期存款（各档月利率亦可 OP 经济管理；[全服] 随 SYNC_CLIENT_SYNC_ECONOMY 下发）
+FIXED_DEPOSIT_RATE_1M=5              # 1 个月档月利率（%），按月复利，30 天=1 个月
+FIXED_DEPOSIT_RATE_3M=5              # 3 个月档月利率（%）
+FIXED_DEPOSIT_RATE_6M=5              # 6 个月档月利率（%）
+FIXED_DEPOSIT_RATE_12M=5             # 12 个月档月利率（%）
 ENABLE_FIXED_DEPOSIT=True            # 定期存款开关（[本服] 各服独立）
 
 # 领地系统

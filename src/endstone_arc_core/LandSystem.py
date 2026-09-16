@@ -1233,6 +1233,20 @@ class LandSystem:
             self._log("error", f"Get player lands error: {str(e)}")
             return {}
 
+    def get_player_lands_total_value(self, xuid: str) -> float:
+        """玩家名下私人领地价值合计：各领地 owner_paid_money（购入/受让成本）之和，资产评估用"""
+        try:
+            total = 0.0
+            for land in self.get_player_lands(xuid).values():
+                try:
+                    total += float(land.get("owner_paid_money") or 0)
+                except (TypeError, ValueError):
+                    continue
+            return round(total, 2)
+        except Exception as e:
+            self._log("error", f"Get player lands total value error: {str(e)}")
+            return 0.0
+
     def get_guild_land_count(self, guild_id: int) -> int:
         try:
             key = self.land_owner_key_guild(guild_id)

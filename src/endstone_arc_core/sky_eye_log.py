@@ -36,6 +36,8 @@ ACTION_LABELS = {
     "LandUpdate": "领地设置",
     "TeleportUse": "传送",
     "ShopTrade": "按钮商店",
+    "ShopOpen": "打开商店",
+    "MiniGame": "小游戏",
     "ItemDrop": "丢弃物品",
     "ItemPickup": "拾取物品",
     "ItemHeldChange": "切换主手",
@@ -84,7 +86,8 @@ _EVENT_KIND_FILTERS: Dict[str, Tuple[List[str], str]] = {
     "teleport": (["TeleportUse", "PlayerTeleport"], ""),
     "economy": (["EconomyChange"], ""),
     "land": (["LandCreate", "LandDelete", "LandUpdate"], ""),
-    "shop": (["ShopTrade"], ""),
+    "shop": (["ShopTrade", "ShopOpen"], ""),
+    "game": (["MiniGame"], ""),
     "item": (["ItemDrop", "ItemPickup", "ItemHeldChange", "ItemConsume"], ""),
 }
 

@@ -652,6 +652,7 @@ class MyPlugin(Plugin):
 | `api_get_player_kill_count` | `entity_id="*"`，`player_name=""`，`xuid=""` | `int`：`*` 为总击杀，否则指定生物 |
 | `api_get_player_block_break_count` | `block_id="*"`，`player_name=""`，`xuid=""` | `int`：破坏方块累计 |
 | `api_get_player_block_place_count` | `block_id="*"`，`player_name=""`，`xuid=""` | `int`：放置方块累计 |
+| `api_get_player_total_assets` | `player_name=""`，`xuid=""` | `dict`：`balance`（现金），`deposits`（定期存款本金），`lands`（名下私人领地成本合计），`total`（三者之和）。供拍卖验资等场景 |
 
 #### 侧边栏
 

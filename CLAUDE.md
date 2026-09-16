@@ -94,7 +94,7 @@ Protocol v4 adds third-party plugin tables: logical name `plugin_id:table`, hub 
 
 Other EndStone plugins can call methods on the `ARCCorePlugin` instance via `server.get_plugin('arc_core')`. Player identity: pass `player_name` and/or `xuid` (`xuid` wins). Old name-only calls remain valid.
 
-- **Economy**: `api_get_player_money`、`api_change_player_money`、`api_adjust_player_money`、`api_get_player_money_rank`、`api_get_all_money_data`、`api_get_richest_player_money_data`
+- **Economy**: `api_get_player_money`、`api_change_player_money`、`api_adjust_player_money`、`api_get_player_money_rank`、`api_get_all_money_data`、`api_get_richest_player_money_data`、`api_get_player_total_assets`（总资产评估：现金+存单本金+领地成本）
 - **Titles**: `api_unlock_title`、`api_unlock_title_by_xuid`、`api_set_title_definition`、`api_ensure_title_definition`、`api_get_title_definition`、`api_list_title_definitions`、`api_has_unlocked_title`、`api_get_equipped_title`、`api_list_unlocked_titles`、`api_give_player_items`
 - **Player**: `api_get_player_xuid_by_name`、`api_get_player_name_by_xuid`、`api_get_player_playtime`
 - **Lands**: `api_if_position_in_land(dimension, (x,y,z))`（规范化维度 + 三维 Y + 多层生效领地）、`api_resolve_land_at_position`、`api_list_lands_at_position`、`api_get_land_info(land_id)`、`api_get_player_lands`、`api_get_guild_lands`、`api_check_land_access`

@@ -483,3 +483,13 @@ class Economy:
             if state["matured"]:
                 count += 1
         return count
+
+    def get_fixed_deposits_total_by_xuid(self, xuid: str) -> float:
+        """玩家全部生效中存单的本金合计（资产评估用，不计利息）"""
+        total = 0.0
+        for row in self.list_fixed_deposits_by_xuid(xuid):
+            try:
+                total += float(row.get("amount") or 0)
+            except (TypeError, ValueError):
+                continue
+        return self.round_money(total)

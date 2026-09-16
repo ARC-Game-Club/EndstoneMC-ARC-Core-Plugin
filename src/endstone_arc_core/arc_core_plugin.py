@@ -520,10 +520,6 @@ class ARCCorePlugin(Plugin):
             self, self._mspt_emergency_shutdown_tick, delay=200, period=200
         )
         
-        # 别踩白块接入
-        self.dtwt_plugin = self.server.plugin_manager.get_plugin('arc_dtwt')
-        print('[ARC Core]DTWT plugin loaded:', self.dtwt_plugin is not None)
-
         # 首富条件头衔：权威服启动时与财富榜核对（从服 no-op）
         try:
             self._ensure_richest_title_definition()
@@ -1463,7 +1459,7 @@ class ARCCorePlugin(Plugin):
 
         self.server.scheduler.run_task(self, _deferred_quit_work, delay=1)
 
-    @event_handler
+    @event_handler(ignore_cancelled=True)
     def on_block_break(self, event: BlockBreakEvent):
         block_loc = event.block.location
         target_desc = getattr(event.block, 'identifier', getattr(event.block, 'type', 'block'))
@@ -1481,11 +1477,6 @@ class ARCCorePlugin(Plugin):
             get_dimension_id(block_loc.dimension), block_loc.x, block_loc.y, block_loc.z
         )
         if event.player.is_op:
-            self._activity_record_block_break(event.player, target_desc)
-            return
-
-        if self.dtwt_plugin is not None and self.dtwt_plugin.api_judge_if_start_block(event.block.location.x, event.block.location.y, event.block.location.z, get_dimension_id(event.block.dimension)):
-            # print('DTWT block break, ignore')
             self._activity_record_block_break(event.player, target_desc)
             return
 
@@ -1721,7 +1712,7 @@ class ARCCorePlugin(Plugin):
         except Exception:
             pass
 
-    @event_handler
+    @event_handler(ignore_cancelled=True)
     def on_player_interact(self, event: PlayerInteractEvent):
         """处理玩家交互事件，保护领地免受非法交互"""
         try:
@@ -1803,18 +1794,6 @@ class ARCCorePlugin(Plugin):
                 return
 
             block_location = block.location
-
-            # DTWT 设施判定（若可用）
-            try:
-                if (
-                    self.dtwt_plugin is not None and
-                    getattr(block, 'dimension', None) is not None and
-                    self.dtwt_plugin.api_judge_if_start_block(block_location.x, block_location.y, block_location.z, get_dimension_id(block.dimension))
-                ):
-                    return
-            except Exception:
-                # 外部插件异常不影响主流程
-                pass
 
             # 维度与坐标
             if getattr(block, 'dimension', None) is not None:
@@ -15375,6 +15354,38 @@ class ARCCorePlugin(Plugin):
         if not resolved:
             return 0.0
         return self.economy.get_player_money_by_xuid(resolved)
+
+    def api_get_player_total_assets(self, player_name: str = "", xuid: str = "") -> dict:
+        """玩家总资产评估（只读）：现金余额 + 定期存款本金 + 名下私人领地价值。
+
+        领地价值 = 各私人领地 owner_paid_money（购入/受让成本）之和；
+        公会领地属公会资产，不计入个人。供拍卖验资等"总资产能否覆盖负债"的场景。
+        :return: {'balance': 现金余额, 'deposits': 定期存款本金合计,
+                  'lands': 领地价值合计, 'total': 三者之和}；玩家解析失败时各项为 0。
+        """
+        balance = 0.0
+        deposits = 0.0
+        lands_value = 0.0
+        resolved = self._api_resolve_player_xuid(player_name, xuid)
+        if resolved:
+            try:
+                balance = float(self.economy.get_player_money_by_xuid(resolved) or 0)
+            except Exception:
+                balance = 0.0
+            try:
+                deposits = float(self.economy.get_fixed_deposits_total_by_xuid(resolved) or 0)
+            except Exception:
+                deposits = 0.0
+            try:
+                lands_value = float(self.land_system.get_player_lands_total_value(resolved) or 0)
+            except Exception:
+                lands_value = 0.0
+        return {
+            "balance": balance,
+            "deposits": deposits,
+            "lands": lands_value,
+            "total": round(balance + deposits + lands_value, 2),
+        }
 
     # ------------------------------------------------------------------ 玩家活动统计 API（只读）
     def api_get_player_stat(

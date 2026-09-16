@@ -1091,7 +1091,7 @@ class LandSystem:
                 "UPDATE lands SET owner_xuid = ?, owner_paid_money = 0, "
                 "for_sale = 0, sale_price = 0, "
                 "public_priority = ?, "
-                "allow_public_interact = 1, allow_actor_interaction = 1, allow_actor_damage = 1 "
+                "allow_public_interact = 0, allow_actor_interaction = 1, allow_actor_damage = 1 "
                 "WHERE land_id = ?",
                 (self.LAND_OWNER_PUBLIC, priority, land_id),
             )

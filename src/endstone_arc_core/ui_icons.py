@@ -29,9 +29,13 @@ CROSS_SERVER = f"{_BASE}/cross_server.png"
 # 银行
 TRANSFER = f"{_BASE}/transfer.png"
 MONEY_RANK = f"{_BASE}/money_rank.png"
+FIXED_DEPOSIT = f"{_BASE}/fixed_deposit.png"
 
 # 邮箱
 MAIL = f"{_BASE}/mail.png"
+
+# 工作 / 职业
+WORK = f"{_BASE}/work.png"
 
 # 领地
 LAND_MANAGE = f"{_BASE}/land_manage.png"

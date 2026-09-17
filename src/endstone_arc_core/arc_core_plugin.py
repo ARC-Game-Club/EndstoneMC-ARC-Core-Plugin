@@ -7831,7 +7831,7 @@ class ARCCorePlugin(Plugin):
         if self._is_fixed_deposit_enabled():
             bank_main_menu.add_button(
                 self.language_manager.GetText('BANK_MAIN_MENU_FIXED_DEPOSIT_BUTTON_TEXT'),
-                icon=self._ui_icon(ui_icons.BANK),
+                icon=self._ui_icon(ui_icons.FIXED_DEPOSIT),
                 on_click=self.show_fixed_deposit_menu,
             )
         bank_main_menu.add_button(

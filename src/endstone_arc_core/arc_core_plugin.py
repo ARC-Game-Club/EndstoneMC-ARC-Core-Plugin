@@ -9205,6 +9205,8 @@ class ARCCorePlugin(Plugin):
                     str(it.get("name") or it.get("item_name")), it.get("count")
                 )
             )
+            for summary in self._summarize_mail_item(it):
+                attach_lines.append(f"  §7{summary}§r")
         content_lines.append(
             self.language_manager.GetText("MAIL_ATTACH_LIST_HEADER")
             if attach_lines
@@ -9358,6 +9360,17 @@ class ARCCorePlugin(Plugin):
                 title=self._toast_title("MAIL_TOAST_TITLE", "邮箱"),
             )
         self.show_mailbox_panel(player)
+
+    def _summarize_mail_item(self, item: Dict[str, Any]) -> List[str]:
+        """附件富物品的 NBT 内容物/附魔中文摘要（arc_inventory ≥ 0.2.1；缺失返回空）。"""
+        inv = self._get_arc_inventory_plugin()
+        fn = getattr(inv, "api_summarize_item", None)
+        if not callable(fn):
+            return []
+        try:
+            return list(fn(item) or [])
+        except Exception:
+            return []
 
     def _player_has_empty_slot(self, player: Player) -> bool:
         """主背包（36 格）是否还有空位；arc_inventory 不可用时按有空间处理。"""

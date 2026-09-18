@@ -6,6 +6,7 @@
 本模块只负责数据与状态，不含 UI 与物品发放（由插件层分发）。
 """
 import json
+import math
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -95,21 +96,45 @@ class MailSystem:
 
     @staticmethod
     def normalize_items(items: Optional[List]) -> List[Dict[str, Any]]:
-        """校验并规整附件物品：[{"item_name"/"id", "count"}] → 有效条目列表。"""
+        """校验并规整附件物品：[{"item_name"/"type"/"id", "count"}] → 有效条目列表。
+
+        兼容 arc_inventory 的富物品条目：若带 nbt_b64 / enchants / lore / name /
+        data 字段则原样保留，发放时可经 arc_inventory 还原完整 NBT（潜影盒内容物、
+        附魔、Lore 不丢失）；普通 item_name+count 条目行为不变。
+        """
         out: List[Dict[str, Any]] = []
         if not isinstance(items, list):
             return out
         for it in items:
             if not isinstance(it, dict):
                 continue
-            name = str(it.get("item_name") or it.get("id") or "").strip()
+            name = str(it.get("item_name") or it.get("type") or it.get("id") or "").strip()
             try:
                 count = int(it.get("count", 1))
             except (TypeError, ValueError):
                 continue
             if not name or count <= 0:
                 continue
-            out.append({"item_name": name, "count": count})
+            entry: Dict[str, Any] = {"item_name": name, "count": count}
+            nbt = str(it.get("nbt_b64") or "").strip()
+            if nbt:
+                entry["nbt_b64"] = nbt
+            enchants = it.get("enchants")
+            if isinstance(enchants, dict) and enchants:
+                entry["enchants"] = {str(k): v for k, v in enchants.items()}
+            lore = it.get("lore")
+            if isinstance(lore, list) and lore:
+                entry["lore"] = [str(x) for x in lore]
+            display = str(it.get("name") or "").strip()
+            if display:
+                entry["name"] = display
+            try:
+                data = int(it.get("data") or 0)
+            except (TypeError, ValueError):
+                data = 0
+            if data:
+                entry["data"] = data
+            out.append(entry)
             if len(out) >= MailSystem.MAX_ATTACHMENT_ITEMS:
                 break
         return out
@@ -287,6 +312,11 @@ class MailSystem:
         view["has_attachment"] = bool(view["items"]) or money > 0
         view["unread"] = view["read_flag"] == 0
         view["unclaimed"] = view["has_attachment"] and view["claimed"] == 0
+        expire = float(view.get("expire_time") or 0)
+        view["remaining_days"] = (
+            None if expire <= 0
+            else max(0, math.ceil((expire - time.time()) / 86400.0))
+        )
         return view
 
     def count_unread(self, xuid: str) -> int:

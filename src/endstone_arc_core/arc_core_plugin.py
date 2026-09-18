@@ -9142,6 +9142,9 @@ class ARCCorePlugin(Plugin):
             button_text = f"{prefix}{title_text}"
             if sender_label:
                 button_text += f"§7（{sender_label}）§r"
+            remaining = m.get("remaining_days")
+            if remaining is not None:
+                button_text += self.language_manager.GetText("MAIL_TAG_REMAIN").format(remaining)
             panel.add_button(
                 button_text,
                 on_click=lambda p, mid=str(m.get("mail_id")): self.show_mail_detail_panel(p, mid),
@@ -9199,7 +9202,7 @@ class ARCCorePlugin(Plugin):
         for it in view.get("items") or []:
             attach_lines.append(
                 self.language_manager.GetText("MAIL_ATTACH_ITEM_LINE").format(
-                    it.get("item_name"), it.get("count")
+                    str(it.get("name") or it.get("item_name")), it.get("count")
                 )
             )
         content_lines.append(
@@ -9209,11 +9212,16 @@ class ARCCorePlugin(Plugin):
         )
         content_lines.extend(attach_lines)
         content_lines.append("")
+        content_lines.append(
+            self.language_manager.GetText("MAIL_DETAIL_SEND_LINE").format(
+                self._format_ts_display(float(view.get("send_time") or 0))
+            )
+        )
         expire_time = float(view.get("expire_time") or 0)
         if expire_time > 0:
             content_lines.append(
                 self.language_manager.GetText("MAIL_DETAIL_EXPIRE_LINE").format(
-                    self._format_ts_display(expire_time)
+                    self._format_ts_display(expire_time), view.get("remaining_days")
                 )
             )
         else:
@@ -9288,6 +9296,11 @@ class ARCCorePlugin(Plugin):
             )
             self.show_mail_detail_panel(player, mail_id)
             return
+        # 带物品附件的邮件：背包无空位时不发放、不标记，保留领取按钮
+        if view.get("items") and not self._player_has_empty_slot(player):
+            player.send_message("物品栏已满，暂时无法领取附件")
+            self.show_mail_detail_panel(player, mail_id)
+            return
         if not self.mail_system.try_mark_claimed(mail_id, xuid):
             # 并发下已被领取（或多服另一端先领）
             self._notify_important(
@@ -9310,13 +9323,19 @@ class ARCCorePlugin(Plugin):
         """一键领取：所有未领取附件的邮件逐封发放。"""
         xuid = str(getattr(player, "xuid", "") or "").strip()
         delivered = 0
+        skipped_full = 0
         for view in self.mail_system.list_mails_for_xuid(xuid, limit=100):
             if not view["unclaimed"]:
+                continue
+            if view.get("items") and not self._player_has_empty_slot(player):
+                skipped_full += 1
                 continue
             if not self.mail_system.try_mark_claimed(str(view.get("mail_id")), xuid):
                 continue
             self._mail_deliver_attachments(player, view)
             delivered += 1
+        if skipped_full > 0:
+            player.send_message(f"物品栏已满，有 {skipped_full} 封带物品附件的邮件暂未领取")
         if delivered > 0:
             self._notify_important(
                 player,
@@ -9340,18 +9359,69 @@ class ARCCorePlugin(Plugin):
             )
         self.show_mailbox_panel(player)
 
+    def _player_has_empty_slot(self, player: Player) -> bool:
+        """主背包（36 格）是否还有空位；arc_inventory 不可用时按有空间处理。"""
+        inv = self._get_arc_inventory_plugin()
+        if inv is None:
+            return True
+        try:
+            items = inv.api_get_inventory_items(player) or []
+        except Exception:
+            return True
+        used = sum(1 for it in items
+                   if isinstance(it, dict) and isinstance(it.get("slot_index"), int))
+        return used < 36
+
+    def _get_arc_inventory_plugin(self):
+        """软依赖取 arc_inventory（需要 api_give_item_count）；不可用返回 None。"""
+        cached = getattr(self, "_arc_inv_plugin", None)
+        if cached is not None:
+            return cached
+        try:
+            plug = self.server.plugin_manager.get_plugin("arc_inventory")
+        except Exception:
+            plug = None
+        if plug is not None and callable(getattr(plug, "api_give_item_count", None)):
+            self._arc_inv_plugin = plug
+            return plug
+        return None
+
     def _grant_items_to_player(self, player: Player, items: Optional[List]) -> List[str]:
-        """逐条 give 发放物品；返回成功发放的 '物品ID×数量' 描述列表。"""
+        """逐条发放物品；返回成功发放的 '物品名×数量' 描述列表。
+
+        富物品（带 nbt_b64/enchants/lore/name/data，即 arc_inventory 条目）优先经
+        arc_inventory.api_give_item_count 发放，还原完整 NBT（潜影盒内容物、附魔、
+        Lore）；普通条目仍走控制台 give，行为与旧版一致。
+        """
         granted: List[str] = []
         if player is None:
             return granted
+        inv = self._get_arc_inventory_plugin()
         for it in MailSystem.normalize_items(items):
+            label = str(it.get("name") or it["item_name"])
+            rich = any(it.get(k) for k in ("nbt_b64", "enchants", "lore", "name", "data"))
+            if rich and inv is not None:
+                given = 0
+                try:
+                    info = dict(it)
+                    info.setdefault("type", it["item_name"])  # arc_inventory 条目用 type 键
+                    given = int(inv.api_give_item_count(player, info) or 0)
+                except Exception as e:
+                    self.logger.error(
+                        f"[ARC Core] 邮件富物品经 arc_inventory 发放失败: {e} item={it.get('item_name')!r}")
+                if given <= 0:
+                    continue
+                if given < it["count"]:
+                    self.logger.error(
+                        f"[ARC Core] 邮件附件发放不完整: {it.get('item_name')} 需 {it['count']} 实入包 {given}（背包空间不足?）")
+                granted.append(f"{label}×{given}")
+                continue
             try:
                 self.server.dispatch_command(
                     self.server.command_sender,
                     f"give {format_mc_command_player_name(player.name)} {it['item_name']} {it['count']}",
                 )
-                granted.append(f"{it['item_name']}×{it['count']}")
+                granted.append(f"{label}×{it['count']}")
             except Exception:
                 pass
         return granted

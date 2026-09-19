@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 from contextlib import suppress
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
@@ -41,10 +42,12 @@ from endstone_arc_core.sync_protocol import (
     build_push_notify,
     build_error_response,
     build_settings_push,
+    build_player_report_response,
 )
 from endstone_arc_core.sync_write import iter_mirror_write_actions, query_sync_table, select_all_sync_table
 from endstone_arc_core.sync_player_audit import (
     append_player_sync_log,
+    as_int,
     classify_basic_info_event,
     extract_xuid_from_request,
     guard_basic_info_counters,
@@ -115,13 +118,15 @@ class SyncServer:
         self.audit_log_path = audit_log_path
         # 无变化整行上行（对账重放）计数：按客户端合并降噪，不逐行刷日志
         self._noop_uplink_counts: Dict[str, int] = {}
-        
+        # 事件上报幂等键：同一次会话的重试（超时后重发）不会重复记账
+        self._player_report_ids: Dict[str, str] = {}
+
         self._socket: Optional[socket.socket] = None
         self._running = False
         self._server_thread: Optional[threading.Thread] = None
         self._clients: Set[ConnectedClient] = set()
         self._clients_lock = threading.Lock()
-        
+
         # 需要同步的表列表
         self._sync_tables = set(TABLE_TO_ENUM.keys())
         # 逻辑表名 -> {"fields", "primary_keys"}（来自客户端 auth 或本机插件注册）
@@ -134,6 +139,18 @@ class SyncServer:
 
         # 全量同步锁（防止同步期间数据不一致）
         self._full_sync_lock = threading.Lock()
+
+    def _player_report_seen(self, xuid: str, report_id: str) -> bool:
+        """检查并登记事件幂等键；重复上报返回 True（直接回当前行，不再记账）。"""
+        if not report_id:
+            return False
+        seen = self._player_report_ids.get(xuid)
+        if seen == report_id:
+            return True
+        if len(self._player_report_ids) > 20000:
+            self._player_report_ids.clear()
+        self._player_report_ids[xuid] = report_id
+        return False
 
     def _log(self, level: str, message: str):
         """安全日志记录"""
@@ -426,6 +443,8 @@ class SyncServer:
         SyncMessageType.FULL_SYNC_REQUEST: lambda self, c, d: self._handle_full_sync(c, d),
         SyncMessageType.PULL_REQUEST: lambda self, c, d: self._handle_pull(c, d),
         SyncMessageType.SETTINGS_PULL_REQUEST: lambda self, c, d: self._handle_settings_pull(c, d),
+        SyncMessageType.SYNC_PLAYER_JOIN: lambda self, c, d: self._handle_player_join(c, d),
+        SyncMessageType.SYNC_PLAYER_QUIT: lambda self, c, d: self._handle_player_quit(c, d),
     }
 
     def _handle_auth(self, client: ConnectedClient, data: Dict):
@@ -868,6 +887,104 @@ class SyncServer:
             client.conn.sendall(build_settings_push(settings))
         except Exception as e:
             self._log("error", f"Settings pull error: {e}")
+
+    def _handle_player_join(self, client: ConnectedClient, data: Dict) -> None:
+        """玩家进服事件记账：中心统一 session_count+1，从服只上报不写游玩数据。"""
+        xuid = str(data.get('xuid') or '').strip()
+        if not xuid:
+            client.conn.sendall(build_player_report_response(False, error="missing xuid"))
+            return
+        name = str(data.get('name') or '').strip()
+        uuid = str(data.get('uuid') or '').strip()
+        joined_at = str(data.get('joined_at') or '').strip() or datetime.now().isoformat(timespec="seconds")
+        report_id = str(data.get('report_id') or '').strip()
+        duplicate = self._player_report_seen(xuid, report_id)
+        try:
+            if not duplicate:
+                with self.db.suppress_write_notify():
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO player_basic_info"
+                        " (xuid, uuid, name, total_playtime, session_count, last_join_time)"
+                        " VALUES (?, ?, ?, 0, 0, ?)",
+                        (xuid, uuid, name, joined_at),
+                    )
+                    self.db.execute(
+                        "UPDATE player_basic_info SET session_count = session_count + 1,"
+                        " last_join_time = ?,"
+                        " name = CASE WHEN ? != '' THEN ? ELSE name END"
+                        " WHERE xuid = ?",
+                        (joined_at, name, name, xuid),
+                    )
+            rows = query_sync_table(self.db, "player_basic_info", "xuid = ?", (xuid,))
+            row = rows[0] if rows else None
+        except Exception as e:
+            client.conn.sendall(build_player_report_response(False, error=str(e)))
+            self._log("error", f"Player join report error: {e}")
+            return
+        if not duplicate:
+            new_count = as_int((row or {}).get("session_count"))
+            self._take_noop_pending(client)
+            self._player_audit(
+                f"[进服] 从服<{client.server_name}> {player_label(row or {'xuid': xuid, 'name': name})}"
+                f" 次数 {max(0, new_count - 1)}→{new_count}"
+                f" | 总时长 {as_int((row or {}).get('total_playtime'))}s"
+                f" | 进服时间 {joined_at}"
+            )
+        if row:
+            self._broadcast_push_resolved(
+                "player_basic_info", None, "insert", dict(row), exclude=client
+            )
+        client.conn.sendall(build_player_report_response(True, row=row))
+
+    def _handle_player_quit(self, client: ConnectedClient, data: Dict) -> None:
+        """玩家退服事件记账：中心统一累加本次时长，从服只上报不写游玩数据。"""
+        xuid = str(data.get('xuid') or '').strip()
+        if not xuid:
+            client.conn.sendall(build_player_report_response(False, error="missing xuid"))
+            return
+        name = str(data.get('name') or '').strip()
+        try:
+            delta = max(0, int(data.get('delta_seconds') or 0))
+        except (TypeError, ValueError):
+            delta = 0
+        quit_at = str(data.get('quit_at') or '').strip() or datetime.now().isoformat(timespec="seconds")
+        report_id = str(data.get('report_id') or '').strip()
+        duplicate = self._player_report_seen(xuid, report_id)
+        try:
+            if not duplicate:
+                with self.db.suppress_write_notify():
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO player_basic_info"
+                        " (xuid, name, total_playtime, session_count, last_quit_time)"
+                        " VALUES (?, ?, ?, 0, ?)",
+                        (xuid, name, delta, quit_at),
+                    )
+                    self.db.execute(
+                        "UPDATE player_basic_info SET total_playtime = total_playtime + ?,"
+                        " last_quit_time = ?,"
+                        " name = CASE WHEN ? != '' THEN ? ELSE name END"
+                        " WHERE xuid = ?",
+                        (delta, quit_at, name, name, xuid),
+                    )
+            rows = query_sync_table(self.db, "player_basic_info", "xuid = ?", (xuid,))
+            row = rows[0] if rows else None
+        except Exception as e:
+            client.conn.sendall(build_player_report_response(False, error=str(e)))
+            self._log("error", f"Player quit report error: {e}")
+            return
+        if not duplicate:
+            new_total = as_int((row or {}).get("total_playtime"))
+            self._take_noop_pending(client)
+            self._player_audit(
+                f"[退服] 从服<{client.server_name}> {player_label(row or {'xuid': xuid, 'name': name})}"
+                f" 总时长 {max(0, new_total - delta)}s→{new_total}s(本次 +{delta}s)"
+                f" | 退服时间 {quit_at}"
+            )
+        if row:
+            self._broadcast_push_resolved(
+                "player_basic_info", None, "insert", dict(row), exclude=client
+            )
+        client.conn.sendall(build_player_report_response(True, row=row))
 
     def broadcast_settings(self, settings: Optional[Dict[str, str]] = None) -> None:
         """向协议版本 >=2 的从服推送玩法配置（可部分键；None 表示按客户端类别全量快照）。"""

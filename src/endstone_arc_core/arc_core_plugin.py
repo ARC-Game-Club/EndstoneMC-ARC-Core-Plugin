@@ -17635,8 +17635,18 @@ class ARCCorePlugin(Plugin):
             if self.logger:
                 self.logger.error(f"[ARC Core] record join playtime error: {e}")
 
+    def _hub_supports_player_events(self) -> bool:
+        """中心协议 >= 5 才支持进/退服事件上报；旧中心走拉改推回退路径。"""
+        client = getattr(self, "sync_client", None)
+        return bool(
+            client is not None
+            and client.is_running()
+            and int(getattr(client, "_server_protocol_version", 0) or 0) >= 5
+            and "player_basic_info" in getattr(client, "enabled_tables", set())
+        )
+
     def _report_player_join_playtime_to_hub(self, player) -> None:
-        """从服：向主服上报进服，由中心累加 session_count；本地只缓存。"""
+        """从服：上报玩家进服事件，由中心统一记账；从服不写游玩数据，只缓存展示。"""
         try:
             import time as _time
             from datetime import datetime as _dt
@@ -17645,6 +17655,51 @@ class ARCCorePlugin(Plugin):
             if not name or not xuid:
                 return
             now_iso = _dt.now().isoformat(timespec="seconds")
+            if self._hub_supports_player_events():
+                started = int(_time.time())
+                report_id = f"{xuid}:j:{started}"
+                try:
+                    row = self.sync_client.send_player_join_report(
+                        xuid, name,
+                        uuid=str(getattr(player, "unique_id", "") or ""),
+                        joined_at=now_iso,
+                        report_id=report_id,
+                    )
+                except Exception as e:
+                    self._safe_log("warning", f"[ARC Core]Join report error for {name}: {e}")
+                    row = None
+                if row is not None:
+                    # 中心已记账：只缓存展示行，本地绝不改写统计
+                    self._play_session_start[xuid] = started
+                    self._cache_basic_info_row_locally(row)
+                    return
+                # 事件上报失败（网络抖动/超时）：无法确定中心是否已记账，
+                # 绝不回退重报以免重复计数；只开始本地计时并留痕。
+                self._play_session_start[xuid] = started
+                self._safe_log(
+                    "warning",
+                    f"[ARC Core]Join report skipped for {name}: hub unreachable;"
+                    f" timer started, will settle on quit",
+                )
+                append_player_sync_log(
+                    self._player_sync_log_path,
+                    f"[进服上报跳过] 从服本地 {name}({xuid}) 事件上报失败，"
+                    f"已开始计时，退服时再结算（防重复计数）",
+                )
+                return
+            self._report_player_join_playtime_to_hub_legacy(
+                player, xuid=xuid, name=name, now_iso=now_iso
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"[ARC Core] report join playtime error: {e}")
+
+    def _report_player_join_playtime_to_hub_legacy(
+        self, player, *, xuid: str, name: str, now_iso: str
+    ) -> None:
+        """旧中心（协议 < 5）回退路径：拉取-修改-整行上报；中心侧有只增不减防护兜底。"""
+        try:
+            import time as _time
             status, row = self._pull_basic_info_from_hub_ex(xuid, timeout=5.0)
             if status in ("unreachable", "disabled"):
                 # 中心连不上≠玩家是新号：此时凭空造 0 行上报会把老玩家的
@@ -17686,7 +17741,7 @@ class ARCCorePlugin(Plugin):
             self._cache_basic_info_row_locally(row)
         except Exception as e:
             if self.logger:
-                self.logger.error(f"[ARC Core] report join playtime error: {e}")
+                self.logger.error(f"[ARC Core] report join playtime legacy error: {e}")
 
     def _record_player_quit_playtime(
         self, player=None, *, xuid: str = "", name: str = ""
@@ -17740,7 +17795,7 @@ class ARCCorePlugin(Plugin):
     def _report_player_quit_playtime_to_hub(
         self, player=None, *, xuid: str = "", name: str = ""
     ) -> None:
-        """从服：向主服上报退服，由中心累加 total_playtime；本地只缓存。"""
+        """从服：上报玩家退服事件（含本次秒数），由中心统一累加时长；本地只缓存。"""
         try:
             import time as _time
             from datetime import datetime as _dt
@@ -17754,6 +17809,44 @@ class ARCCorePlugin(Plugin):
                 started = self._play_session_start.pop(name, None)
             now_iso = _dt.now().isoformat(timespec="seconds")
             delta = max(0, int(_time.time()) - int(started)) if started is not None else 0
+            if self._hub_supports_player_events():
+                report_id = f"{xuid}:q:{int(started) if started is not None else now_iso}"
+                try:
+                    row = self.sync_client.send_player_quit_report(
+                        xuid, name, delta, quit_at=now_iso, report_id=report_id
+                    )
+                except Exception as e:
+                    self._safe_log("warning", f"[ARC Core]Quit report error for {name or xuid}: {e}")
+                    row = None
+                if row is not None:
+                    # 中心已记账：只缓存展示行
+                    self._cache_basic_info_row_locally(row)
+                    return
+                # 事件上报失败：中心是否已记账未知，绝不回退重报以免把本次
+                # 时长计两次。留痕后放弃本次结算（最多丢一次会话时长，可审计）。
+                self._safe_log(
+                    "warning",
+                    f"[ARC Core]Quit report skipped for {name or xuid}: hub unreachable;"
+                    f" {delta}s unsettled this session",
+                )
+                append_player_sync_log(
+                    self._player_sync_log_path,
+                    f"[退服上报跳过] 从服本地 {name or '?'}({xuid}) 事件上报失败，"
+                    f"本次 +{delta}s 未入账（防重复计数，已留痕）",
+                )
+                return
+            self._report_player_quit_playtime_to_hub_legacy(
+                xuid=xuid, name=name, now_iso=now_iso, delta=delta
+            )
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"[ARC Core] report quit playtime error: {e}")
+
+    def _report_player_quit_playtime_to_hub_legacy(
+        self, *, xuid: str, name: str, now_iso: str, delta: int
+    ) -> None:
+        """旧中心（协议 < 5）回退路径：拉取-修改-整行上报；中心侧有只增不减防护兜底。"""
+        try:
             status, remote = self._pull_basic_info_from_hub_ex(xuid, timeout=5.0)
             if status == "ok":
                 row = dict(remote)
@@ -17791,7 +17884,7 @@ class ARCCorePlugin(Plugin):
             self._cache_basic_info_row_locally(row)
         except Exception as e:
             if self.logger:
-                self.logger.error(f"[ARC Core] report quit playtime error: {e}")
+                self.logger.error(f"[ARC Core] report quit playtime legacy error: {e}")
 
     def _settle_all_online_playtime(self) -> None:
         """Settle timers for all online players (plugin disable / shutdown)."""

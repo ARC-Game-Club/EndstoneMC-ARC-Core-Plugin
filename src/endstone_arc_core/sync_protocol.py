@@ -32,7 +32,11 @@ class SyncMessageType(IntEnum):
     PULL_REQUEST = 0x32          # 拉取数据请求（客户端主动拉取）
     PUSH_NOTIFY = 0x33           # 服务器推送通知（服务器端数据变更）
     SETTINGS_PULL_REQUEST = 0x40  # 客户端请求玩法配置快照
-    SETTINGS_PUSH = 0x41          # 同步中心下发玩法配置
+    SETTINGS_PUSH = 0x41         # 同步中心下发玩法配置
+    # 5+：玩家游玩事件上报（从服只发事件，中心统一记账，从服不写游玩数据）
+    SYNC_PLAYER_JOIN = 0x42      # 玩家进服事件上报
+    SYNC_PLAYER_QUIT = 0x43      # 玩家退服事件上报（含本次时长）
+    SYNC_PLAYER_REPORT_RESPONSE = 0x44  # 事件上报响应（带回记账后的最新行）
 
     # 错误和响应
     ERROR_RESPONSE = 0xFF         # 错误响应
@@ -74,7 +78,9 @@ ENUM_TO_TABLE = {v: k for k, v in TABLE_TO_ENUM.items()}
 # 2+：认证响应可带 settings；可收 SETTINGS_PUSH。旧客户端不发此字段，视为 1。
 # 3+：数据操作请求/响应带 seq；响应使用真实的 INSERT/UPDATE/DELETE_RESPONSE。
 # 4+：可选 table_name（plugin_id:table）与认证 plugin_tables；插件命名空间表同步。
-PROTOCOL_VERSION = 4
+# 5+：玩家游玩事件上报（SYNC_PLAYER_JOIN/QUIT）；从服不再改写 player_basic_info 的游玩统计，
+#     统一只在中心发生（中心回 5 表示支持；旧中心回 4，从服自动回退旧的拉改推路径）。
+PROTOCOL_VERSION = 5
 
 # 请求类型 → 对应响应类型
 REQUEST_TO_RESPONSE = {
@@ -267,6 +273,53 @@ def build_full_sync_response(success: bool, rows: List[Dict], error: str = "") -
         'success': success,
         'rows': rows,
         'error': error,
+    })
+
+
+def build_player_join_report(
+    xuid: str, name: str, uuid: str = "", joined_at: str = "", report_id: str = ""
+) -> bytes:
+    """从服 → 中心：玩家进服事件。中心负责 session_count+1 并记录进服时间。
+
+    report_id 为同一次会话的幂等键：中心据此去重，客户端超时重试不会重复计数。
+    """
+    return encode_message(SyncMessageType.SYNC_PLAYER_JOIN, {
+        'xuid': str(xuid or ''),
+        'name': str(name or ''),
+        'uuid': str(uuid or ''),
+        'joined_at': str(joined_at or ''),
+        'report_id': str(report_id or ''),
+    })
+
+
+def build_player_quit_report(
+    xuid: str, name: str, delta_seconds: int, quit_at: str = "", report_id: str = ""
+) -> bytes:
+    """从服 → 中心：玩家退服事件。中心负责累加本次时长并记录退服时间。
+
+    report_id 为幂等键：超时重试同 ID 不会把本次时长计两次。
+    """
+    try:
+        delta = max(0, int(delta_seconds))
+    except (TypeError, ValueError):
+        delta = 0
+    return encode_message(SyncMessageType.SYNC_PLAYER_QUIT, {
+        'xuid': str(xuid or ''),
+        'name': str(name or ''),
+        'delta_seconds': delta,
+        'quit_at': str(quit_at or ''),
+        'report_id': str(report_id or ''),
+    })
+
+
+def build_player_report_response(
+    success: bool, row: Optional[Dict[str, Any]] = None, error: str = ""
+) -> bytes:
+    """中心 → 从服：事件记账结果，row 为记账后的中心最新行（供从服缓存展示）。"""
+    return encode_message(SyncMessageType.SYNC_PLAYER_REPORT_RESPONSE, {
+        'success': bool(success),
+        'row': dict(row) if row else None,
+        'error': str(error or ''),
     })
 
 

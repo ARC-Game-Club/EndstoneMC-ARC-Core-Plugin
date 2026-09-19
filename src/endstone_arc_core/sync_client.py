@@ -26,6 +26,8 @@ from endstone_arc_core.sync_protocol import (
     build_data_request,
     build_full_sync_request,
     build_heartbeat,
+    build_player_join_report,
+    build_player_quit_report,
     build_query_request,
     build_settings_pull_request,
     decode_message,
@@ -412,6 +414,71 @@ class SyncClient:
         if table not in self.enabled_tables or not row:
             return None
         return sync_outbox.enqueue(self.db, table, "insert", {"row": dict(row)})
+
+    def send_player_join_report(
+        self, xuid: str, name: str, uuid: str = "", joined_at: str = "",
+        report_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """从服上报玩家进服事件；中心统一记账，从服不写游玩数据。
+
+        返回中心记账后的最新行（供从服缓存展示）；None 表示中心不支持
+        （协议 < 5）或上报失败，调用方应回退旧路径。report_id 为幂等键，
+        超时后以同键重试一次，中心去重保证不重复计数。
+        """
+        if not self.is_running() or "player_basic_info" not in self.enabled_tables:
+            return None
+        payload = build_player_join_report(
+            xuid, name, uuid=uuid, joined_at=joined_at, report_id=report_id
+        )
+        return self._send_player_report(payload)
+
+    def send_player_quit_report(
+        self, xuid: str, name: str, delta_seconds: int, quit_at: str = "",
+        report_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """从服上报玩家退服事件（含本次秒数）；中心统一累加时长。
+
+        返回中心记账后的最新行；None 表示中心不支持或失败，调用方回退旧路径。
+        report_id 为幂等键：超时重试同 ID 不会把本次时长计两次。
+        """
+        if not self.is_running() or "player_basic_info" not in self.enabled_tables:
+            return None
+        payload = build_player_quit_report(
+            xuid, name, delta_seconds, quit_at=quit_at, report_id=report_id
+        )
+        return self._send_player_report(payload)
+
+    def _send_player_report(self, payload: bytes) -> Optional[Dict[str, Any]]:
+        """发送游玩事件并等待记账结果；瞬时失败以同一幂等键重试一次。"""
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                msg_type, data = self._request_response(
+                    payload,
+                    expect_types={
+                        SyncMessageType.SYNC_PLAYER_REPORT_RESPONSE,
+                        SyncMessageType.ERROR_RESPONSE,
+                    },
+                    timeout=8.0,
+                )
+                if msg_type == SyncMessageType.ERROR_RESPONSE:
+                    self._last_error = str(
+                        data.get("message") or "hub rejected player report"
+                    )
+                    return None
+                if not data.get("success"):
+                    self._last_error = str(
+                        data.get("error") or "player report failed"
+                    )
+                    return None
+                row = data.get("row")
+                return dict(row) if isinstance(row, dict) else None
+            except (TimeoutError, ConnectionError, OSError) as e:
+                last_error = e
+                if attempt == 0:
+                    time.sleep(1.0)
+        self._last_error = str(last_error)
+        return None
 
     def upsert_row_wait(
         self,
@@ -828,9 +895,12 @@ class SyncClient:
     def _enqueue_local_tables_for_reconcile(self, tables: Set[str]) -> int:
         from endstone_arc_core.sync_write import select_all_sync_table
 
+        # 游玩数据只由中心记账：从服的 player_basic_info 是拉下来的展示缓存，
+        # 永远不参与整表对账上行（进退服走 SYNC_PLAYER_JOIN/QUIT 事件）。
+        skip_tables = {"player_basic_info"}
         queued = 0
         for table_name in sorted(tables):
-            if table_name not in self.enabled_tables:
+            if table_name not in self.enabled_tables or table_name in skip_tables:
                 continue
             snapshot = self._hub_snapshot.get(table_name) or {}
             try:

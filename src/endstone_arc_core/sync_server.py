@@ -113,6 +113,8 @@ class SyncServer:
         self.logger = logger
         self._on_economy_mutated = on_economy_mutated
         self.audit_log_path = audit_log_path
+        # 无变化整行上行（对账重放）计数：按客户端合并降噪，不逐行刷日志
+        self._noop_uplink_counts: Dict[str, int] = {}
         
         self._socket: Optional[socket.socket] = None
         self._running = False
@@ -156,6 +158,30 @@ class SyncServer:
             return None
         return rows[0] if rows else None
 
+    def _noop_key(self, client: ConnectedClient) -> str:
+        return client.server_id or f"{client.addr[0]}:{client.addr[1]}"
+
+    def _record_noop_uplink(self, client: ConnectedClient) -> None:
+        """累计无变化行；每满 200 行输出一条汇总，避免整表重放刷屏。"""
+        key = self._noop_key(client)
+        self._noop_uplink_counts[key] = self._noop_uplink_counts.get(key, 0) + 1
+        count = self._noop_uplink_counts[key]
+        if count % 200 == 0:
+            self._player_audit(
+                f"[对账] 从服<{client.server_name}> 无变化整行上行已累计 ×{count}"
+                f"（原值落库，无数据变更）"
+            )
+
+    def _take_noop_pending(self, client: ConnectedClient) -> None:
+        """真实事件到来前，先汇总冲掉此前积累的无变化行计数。"""
+        key = self._noop_key(client)
+        count = self._noop_uplink_counts.pop(key, 0)
+        if count > 0:
+            self._player_audit(
+                f"[对账] 从服<{client.server_name}> 无变化整行上行 ×{count}"
+                f"（原值落库，无数据变更）"
+            )
+
     def _audit_basic_info_payload(
         self, client: ConnectedClient, data: Dict, op_label: str
     ) -> Dict[str, Any]:
@@ -169,6 +195,12 @@ class SyncServer:
             return ctx
         old_row = self._fetch_basic_info_old(data)
         event = classify_basic_info_event(old_row, row_data)
+        if event == "无变化":
+            # 与中心完全一致的整行（对账重放）：不逐行记审计，只计数
+            ctx["old_row"] = old_row
+            ctx["event"] = "无变化"
+            self._record_noop_uplink(client)
+            return ctx
         guarded_data, blocked = guard_basic_info_counters(old_row, row_data)
         if blocked:
             # 就地替换，_handle_insert/_handle_update 持有的是同一引用
@@ -195,6 +227,10 @@ class SyncServer:
         """写后审计：一行 old→new（含进退服、时长变化、拦截后实际生效值）。"""
         if not ctx or not ctx.get("event"):
             return
+        if ctx["event"] == "无变化":
+            # 已在 _record_noop_uplink 计数汇总，不逐行记审计
+            return
+        self._take_noop_pending(client)
         server = f"从服<{client.server_name}>"
         new_data = data.get("data") or {}
         old_row = ctx.get("old_row")

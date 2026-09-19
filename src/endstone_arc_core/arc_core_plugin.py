@@ -2307,7 +2307,7 @@ class ARCCorePlugin(Plugin):
     def _guild_plugin(self):
         """软依赖：arc_guild 插件实例；未安装或异常返回 None。"""
         try:
-            return self.server.get_plugin("arc_guild")
+            return self.server.plugin_manager.get_plugin("arc_guild")
         except Exception:
             return None
 

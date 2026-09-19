@@ -70,14 +70,40 @@ def extract_xuid_from_request(data: Dict[str, Any]) -> str:
 def classify_basic_info_event(
     old_row: Optional[Dict[str, Any]], new_data: Dict[str, Any]
 ) -> str:
-    """按上报载荷判断业务事件：进服 / 退服 / 新建档 / 资料。"""
-    if "last_join_time" in new_data:
-        return "进服"
-    if "last_quit_time" in new_data or "total_playtime" in new_data:
-        return "退服"
+    """按旧值对比判定业务事件：进服 / 退服 / 新建档 / 资料 / 无变化。
+
+    只有次数或进退服时间相对中心旧值真的变化了才算进/退服；
+    与旧值完全一致的整行上行（对账重放）返回「无变化」，由中心侧合并降噪。
+    """
+    new_data = new_data or {}
     if old_row is None:
+        if "last_join_time" in new_data:
+            return "进服"
+        if "last_quit_time" in new_data or "total_playtime" in new_data:
+            return "退服"
         return "新建档"
-    return "资料"
+    join_changed = (
+        "last_join_time" in new_data
+        and new_data.get("last_join_time") != old_row.get("last_join_time")
+    )
+    count_up = "session_count" in new_data and as_int(
+        new_data.get("session_count")
+    ) > as_int(old_row.get("session_count"))
+    if join_changed or count_up:
+        return "进服"
+    quit_changed = (
+        "last_quit_time" in new_data
+        and new_data.get("last_quit_time") != old_row.get("last_quit_time")
+    )
+    playtime_up = "total_playtime" in new_data and as_int(
+        new_data.get("total_playtime")
+    ) > as_int(old_row.get("total_playtime"))
+    if quit_changed or playtime_up:
+        return "退服"
+    for key, value in new_data.items():
+        if old_row.get(key) != value:
+            return "资料"
+    return "无变化"
 
 
 def guard_basic_info_counters(

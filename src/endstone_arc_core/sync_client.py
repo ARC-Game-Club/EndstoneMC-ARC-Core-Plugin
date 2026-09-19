@@ -30,7 +30,7 @@ from endstone_arc_core.sync_protocol import (
     build_settings_pull_request,
     decode_message,
 )
-from endstone_arc_core.sync_write import iter_mirror_write_actions
+from endstone_arc_core.sync_write import iter_mirror_write_actions, SYNC_TABLE_PRIMARY_KEYS
 
 
 class SyncClient:
@@ -76,6 +76,9 @@ class SyncClient:
         self._server_protocol_version = 1
         self._last_error = ""
         self._flushing = False
+        # 连接期全量快照：拉全量时记录中心已有行（按主键），对账上行时跳过与中心完全一致的行，
+        # 避免每次重连把整张表原样重推一遍（此前每次重连都白推几百上千行）。
+        self._hub_snapshot: Dict[str, Dict[tuple, Dict[str, Any]]] = {}
         # 主线程 mirror 只入队；后台监听循环被唤醒后 flush，避免主线程 sendall
         self._outbox_wake = threading.Event()
         # TCP 粘包缓冲：跨多次 recv / request-response 保留半包，避免错位超时
@@ -514,6 +517,8 @@ class SyncClient:
             flushed = self.flush_outbox()
             if flushed:
                 self._log("info", f"Flushed {flushed} outbox item(s) after connect")
+            # 对账上行已定稿，快照只服务本次连接，及时释放
+            self._hub_snapshot = {}
 
             with self._socket_lock:
                 if self._socket:
@@ -697,6 +702,7 @@ class SyncClient:
         return True
 
     def _perform_full_sync(self) -> None:
+        self._hub_snapshot = {}
         for table_name in sorted(self.enabled_tables):
             table_enum = TABLE_TO_ENUM.get(table_name)
             if table_enum is None:
@@ -739,8 +745,13 @@ class SyncClient:
             if table_name:
                 applied = self._apply_plugin_rows_full(table_name, rows)
             else:
+                snapshot = self._hub_snapshot.setdefault(label, {})
+                pks = SYNC_TABLE_PRIMARY_KEYS.get(label)
                 applied = 0
                 for row in rows:
+                    if pks:
+                        key = tuple(str(row.get(pk)) for pk in pks)
+                        snapshot[key] = dict(row)
                     if self._upsert_row(label, row):
                         applied += 1
             self._log(
@@ -779,6 +790,41 @@ class SyncClient:
             "outbox_pending": pending,
         }
 
+    def _row_pk_key(self, table: str, row: Dict[str, Any]) -> Optional[tuple]:
+        """按表主键生成行键；无主键定义返回 None。"""
+        pks = SYNC_TABLE_PRIMARY_KEYS.get(str(table))
+        if not pks:
+            return None
+        try:
+            return tuple(str(row.get(pk)) for pk in pks)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _values_equal(a: Any, b: Any) -> bool:
+        if a is None and b is None:
+            return True
+        try:
+            if (
+                isinstance(a, (int, float))
+                and isinstance(b, (int, float))
+                and not isinstance(a, bool)
+                and not isinstance(b, bool)
+            ):
+                return abs(float(a) - float(b)) < 1e-9
+        except (TypeError, ValueError):
+            pass
+        return a == b
+
+    def _rows_equal(self, local_row: Dict[str, Any], hub_row: Dict[str, Any]) -> bool:
+        """本地行与中心行是否完全一致（数值容差比较，忽略键顺序）。"""
+        if set(local_row.keys()) != set(hub_row.keys()):
+            return False
+        return all(
+            self._values_equal(local_row.get(k), hub_row.get(k))
+            for k in local_row.keys()
+        )
+
     def _enqueue_local_tables_for_reconcile(self, tables: Set[str]) -> int:
         from endstone_arc_core.sync_write import select_all_sync_table
 
@@ -786,8 +832,15 @@ class SyncClient:
         for table_name in sorted(tables):
             if table_name not in self.enabled_tables:
                 continue
+            snapshot = self._hub_snapshot.get(table_name) or {}
             try:
                 for row in select_all_sync_table(self.db, table_name):
+                    # 刚拉过全量：与中心完全一致的行不再重推（历史上每次重连
+                    # 都会把整张表原样上行几百上千行，纯属洪水）。
+                    key = self._row_pk_key(table_name, row)
+                    if key is not None and key in snapshot:
+                        if self._rows_equal(row, snapshot[key]):
+                            continue
                     if self.enqueue_upsert_row(table_name, row):
                         queued += 1
             except Exception as e:

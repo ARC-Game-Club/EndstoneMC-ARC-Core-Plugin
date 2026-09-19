@@ -43,6 +43,15 @@ from endstone_arc_core.sync_protocol import (
     build_settings_push,
 )
 from endstone_arc_core.sync_write import iter_mirror_write_actions, query_sync_table, select_all_sync_table
+from endstone_arc_core.sync_player_audit import (
+    append_player_sync_log,
+    classify_basic_info_event,
+    extract_xuid_from_request,
+    guard_basic_info_counters,
+    format_counter_changes,
+    player_label,
+    summarize_basic_info_row,
+)
 
 
 @dataclass(eq=False)
@@ -82,10 +91,11 @@ class SyncServer:
         logger=None,
         setting_manager=None,
         on_economy_mutated: Optional[Callable[[], None]] = None,
+        audit_log_path: str = "",
     ):
         """
         初始化同步服务器
-        
+
         :param database_manager: 数据库管理器实例
         :param auth_key: 认证密钥
         :param bind_host: 绑定地址
@@ -93,6 +103,7 @@ class SyncServer:
         :param logger: 日志记录器
         :param setting_manager: 配置管理器（用于向从服下发玩法配置）
         :param on_economy_mutated: 从服成功写入 player_economy 后的回调（主服条件头衔刷新）
+        :param audit_log_path: 玩家数据同步审计日志文件路径（player_basic_info 进退服/变更/查询全记录）
         """
         self.db = database_manager
         self.settings = setting_manager
@@ -101,6 +112,7 @@ class SyncServer:
         self.bind_port = bind_port
         self.logger = logger
         self._on_economy_mutated = on_economy_mutated
+        self.audit_log_path = audit_log_path
         
         self._socket: Optional[socket.socket] = None
         self._running = False
@@ -127,6 +139,87 @@ class SyncServer:
             getattr(self.logger, level.lower(), self.logger.info)(f"[ARC SyncServer] {message}")
         else:
             print(f"[{level.upper()}] [ARC SyncServer] {message}")
+
+    def _player_audit(self, line: str, level: str = "info") -> None:
+        """玩家同步审计：写 player_sync_log.txt 并进服务器日志，双落点。"""
+        append_player_sync_log(self.audit_log_path, line)
+        self._log(level, line)
+
+    def _fetch_basic_info_old(self, data: Dict) -> Optional[Dict[str, Any]]:
+        """按请求定位中心侧旧行：整行 xuid 或 where+params（xuid = ?）。"""
+        xuid = extract_xuid_from_request(data)
+        if not xuid:
+            return None
+        try:
+            rows = query_sync_table(self.db, "player_basic_info", "xuid = ?", (xuid,))
+        except Exception:
+            return None
+        return rows[0] if rows else None
+
+    def _audit_basic_info_payload(
+        self, client: ConnectedClient, data: Dict, op_label: str
+    ) -> Dict[str, Any]:
+        """写前审计：取旧行 → 分类事件 → 计数回退防护（就地改写 data['data']）。
+
+        返回审计上下文；写后由 _audit_basic_info_after 补 old→new 一行。
+        """
+        ctx: Dict[str, Any] = {"old_row": None, "event": "", "guarded": False}
+        row_data = data.get("data")
+        if not isinstance(row_data, dict) or not row_data:
+            return ctx
+        old_row = self._fetch_basic_info_old(data)
+        event = classify_basic_info_event(old_row, row_data)
+        guarded_data, blocked = guard_basic_info_counters(old_row, row_data)
+        if blocked:
+            # 就地替换，_handle_insert/_handle_update 持有的是同一引用
+            data["data"] = guarded_data
+            ctx["guarded"] = True
+            self._player_audit(
+                f"[拦截回退] 从服<{client.server_name}> {player_label(row_data)}"
+                f" {' | '.join(blocked)} → 均按原值保留（{op_label}，按 {event} 载荷处理）",
+                level="warning",
+            )
+        ctx["old_row"] = old_row
+        ctx["event"] = event
+        return ctx
+
+    def _audit_basic_info_after(
+        self,
+        client: ConnectedClient,
+        data: Dict,
+        ctx: Dict[str, Any],
+        op_label: str,
+        success: bool,
+        error: str = "",
+    ) -> None:
+        """写后审计：一行 old→new（含进退服、时长变化、拦截后实际生效值）。"""
+        if not ctx or not ctx.get("event"):
+            return
+        server = f"从服<{client.server_name}>"
+        new_data = data.get("data") or {}
+        old_row = ctx.get("old_row")
+        if not success:
+            self._player_audit(
+                f"[写入失败] {server} {player_label(new_data)}"
+                f" {op_label} 失败: {error or '未知错误'}",
+                level="error",
+            )
+            return
+        if old_row is None:
+            new_row = self._fetch_basic_info_old(data)
+            self._player_audit(
+                f"[{ctx['event']}] {server} {player_label(new_row or new_data)}"
+                f" 中心新建档 | {format_counter_changes(None, new_row or new_data)}"
+            )
+            return
+        new_row = self._fetch_basic_info_old(data)
+        final_view = new_row if new_row else {**old_row, **new_data}
+        # 只展示本次上报涉及的字段（值取中心侧最终值），避免每次都把整行打出来
+        display_view = {k: v for k, v in final_view.items() if k in new_data}
+        self._player_audit(
+            f"[{ctx['event']}] {server} {player_label(final_view)}"
+            f" {format_counter_changes(old_row, display_view)}"
+        )
 
     def start(self) -> bool:
         """启动同步服务器"""
@@ -465,6 +558,12 @@ class SyncServer:
                 results = query_physical_rows(self.db, phys, where, tuple(params))
             else:
                 results = query_sync_table(self.db, core_table, where, tuple(params))
+            if core_table == "player_basic_info":
+                summary = summarize_basic_info_row(results[0]) if results else "(无记录)"
+                self._player_audit(
+                    f"[查询] 从服<{client.server_name}> where={where!r}"
+                    f" params={list(params or [])} → {len(results)}行: {summary}"
+                )
             client.conn.sendall(build_query_response(True, results))
         except Exception as e:
             client.conn.sendall(build_query_response(False, [], str(e)))
@@ -487,12 +586,10 @@ class SyncServer:
         data: Dict,
         *,
         log_label: str,
-        mutate,
         push_op: str,
-        push_data: Dict,
         request_type: SyncMessageType,
     ) -> None:
-        """校验表权限 → 抑制通知写库 → 成功则广播 → 回响应（带 seq）。"""
+        """校验表权限 → （玩家表：审计+计数回退防护）→ 抑制通知写库 → 成功则广播 → 回响应（带 seq）。"""
         seq = data.get("seq")
         try:
             seq = int(seq) if seq is not None else None
@@ -501,6 +598,7 @@ class SyncServer:
         resp_type = REQUEST_TO_RESPONSE.get(
             request_type, SyncMessageType.INSERT_RESPONSE
         )
+        audit_ctx: Optional[Dict[str, Any]] = None
         try:
             core_table, plugin_logical, phys = self._resolve_request_tables(client, data)
             if not phys:
@@ -510,13 +608,36 @@ class SyncServer:
                     )
                 )
                 return
+            if phys == "player_basic_info" and isinstance(data.get("data"), dict):
+                audit_ctx = self._audit_basic_info_payload(client, data, log_label)
+            row_data = dict(data.get("data") or {})
             with self.db.suppress_write_notify():
-                success = mutate(phys)
+                if push_op == "insert":
+                    success = self.db.upsert(phys, row_data)
+                elif push_op == "update":
+                    success = self.db.update(
+                        phys,
+                        row_data,
+                        data.get("where", ""),
+                        tuple(data.get("params") or []),
+                    )
+                else:
+                    success = False
             if success:
+                if push_op == "update":
+                    push_payload: Dict = {
+                        **row_data,
+                        "_where": data.get("where", ""),
+                        "_params": list(data.get("params") or []),
+                    }
+                else:
+                    push_payload = row_data
                 self._broadcast_push_resolved(
-                    core_table, plugin_logical, push_op, push_data, exclude=client
+                    core_table, plugin_logical, push_op, push_payload, exclude=client
                 )
                 self._notify_economy_mutated(core_table)
+            if audit_ctx is not None:
+                self._audit_basic_info_after(client, data, audit_ctx, log_label, success)
             client.conn.sendall(
                 build_data_response(
                     resp_type, success, 1 if success else 0, seq=seq
@@ -527,46 +648,46 @@ class SyncServer:
                 build_data_response(resp_type, False, 0, str(e), seq=seq)
             )
             self._log("error", f"{log_label} error: {e}")
+            if audit_ctx is not None:
+                self._audit_basic_info_after(
+                    client, data, audit_ctx, log_label, False, str(e)
+                )
 
     def _handle_insert(self, client: ConnectedClient, data: Dict):
         """处理插入/整行 upsert 请求"""
-        row_data = data.get('data', {})
         self._apply_client_mutation(
             client,
             data,
             log_label="Insert",
-            mutate=lambda t: self.db.upsert(t, row_data),
             push_op="insert",
-            push_data=row_data,
             request_type=SyncMessageType.INSERT_REQUEST,
         )
 
     def _handle_update(self, client: ConnectedClient, data: Dict):
         """处理更新请求"""
-        row_data = data.get('data', {})
-        where = data.get('where', '')
-        params = data.get('params', [])
         self._apply_client_mutation(
             client,
             data,
             log_label="Update",
-            mutate=lambda t: self.db.update(t, row_data, where, tuple(params)),
             push_op="update",
-            push_data={**row_data, '_where': where, '_params': params},
             request_type=SyncMessageType.UPDATE_REQUEST,
         )
 
     def _handle_delete(self, client: ConnectedClient, data: Dict):
         """处理删除请求"""
-        where = data.get('where', '')
-        params = data.get('params', [])
+        core_table, _plugin_logical, phys = self._resolve_request_tables(client, data)
+        if phys == "player_basic_info":
+            # 玩家主数据删除属高危操作：审计留痕（行为不变）
+            self._player_audit(
+                f"[删除] 从服<{client.server_name}> 请求删除 player_basic_info:"
+                f" where={data.get('where', '')!r} params={list(data.get('params') or [])}",
+                level="warning",
+            )
         self._apply_client_mutation(
             client,
             data,
             log_label="Delete",
-            mutate=lambda t: self.db.delete(t, where, tuple(params)),
             push_op="delete",
-            push_data={'_where': where, '_params': params},
             request_type=SyncMessageType.DELETE_REQUEST,
         )
 
@@ -615,8 +736,22 @@ class SyncServer:
                 if table_name not in self._sync_tables:
                     results.append({"success": False, "error": "Table not allowed"})
                     continue
+                audit_ctx = None
+                if table_name == "player_basic_info" and isinstance(op.get("data"), dict):
+                    audit_ctx = self._audit_basic_info_payload(
+                        client, op, f"Batch/{op.get('type', '?')}"
+                    )
                 result = self._run_batch_op(op.get("type"), table_name, op)
                 results.append(result)
+                if audit_ctx is not None:
+                    self._audit_basic_info_after(
+                        client,
+                        op,
+                        audit_ctx,
+                        f"Batch/{op.get('type', '?')}",
+                        bool(result.get("success")),
+                        str(result.get("error") or ""),
+                    )
                 if result.get("success") and table_name == "player_economy":
                     economy_touched = True
 
@@ -675,6 +810,12 @@ class SyncServer:
                 results = query_physical_rows(self.db, phys, where, tuple(params))
             else:
                 results = query_sync_table(self.db, core_table, where, tuple(params))
+            if core_table == "player_basic_info":
+                summary = summarize_basic_info_row(results[0]) if results else "(无记录)"
+                self._player_audit(
+                    f"[查询] 从服<{client.server_name}> PULL where={where!r}"
+                    f" params={list(params or [])} → {len(results)}行: {summary}"
+                )
             client.conn.sendall(build_query_response(True, results))
         except Exception as e:
             client.conn.sendall(build_query_response(False, [], str(e)))

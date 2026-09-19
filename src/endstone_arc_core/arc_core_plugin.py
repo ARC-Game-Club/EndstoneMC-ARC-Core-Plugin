@@ -37,6 +37,7 @@ from endstone_arc_core.sky_eye_log import SkyEyeStore, format_sky_eye_records, p
 from endstone_arc_core.sync_server import SyncServer
 from endstone_arc_core.sync_client import SyncClient
 from endstone_arc_core.sync_config import ALL_SHARED_SETTING_KEYS, resolve_sync_consumer_mode
+from endstone_arc_core.sync_player_audit import append_player_sync_log
 from endstone_arc_core.SidebarSystem import SidebarSystem
 from endstone_arc_core import bedrock_glyphs
 from endstone_arc_core import ui_icons
@@ -198,6 +199,8 @@ class ARCCorePlugin(Plugin):
             pass
         self.init_database()
         self._arc_error_log_path = str(Path(MAIN_PATH) / "error_log.txt")
+        # 玩家同步审计日志：进退服/时长变更/拦截回退全记录（中心侧由 SyncServer 也写此文件）
+        self._player_sync_log_path = str(Path(MAIN_PATH) / "player_sync_log.txt")
 
         # 跨服数据同步服务（在 on_enable 中启动，确保 logger 可用）
         self.sync_server: Optional[SyncServer] = None
@@ -620,6 +623,7 @@ class ARCCorePlugin(Plugin):
                 bind_port=sync_port,
                 logger=self.logger,
                 on_economy_mutated=self._schedule_richest_title_refresh,
+                audit_log_path=self._player_sync_log_path,
             )
             if self.sync_server.start():
                 self.logger.info(f"[ARC Core] Sync server started on port {sync_port}")
@@ -4164,13 +4168,25 @@ class ARCCorePlugin(Plugin):
         self, xuid: str, timeout: float = 5.0
     ) -> Optional[Dict[str, Any]]:
         """从服向同步中心按 XUID 拉一行 player_basic_info；失败返回 None。"""
+        status, row = self._pull_basic_info_from_hub_ex(xuid, timeout=timeout)
+        return row if status == "ok" else None
+
+    def _pull_basic_info_from_hub_ex(
+        self, xuid: str, timeout: float = 5.0
+    ) -> Tuple[str, Optional[Dict[str, Any]]]:
+        """拉取并区分“中心没记录”与“中心连不上”。
+
+        返回 (status, row)，status ∈ ok / missing / unreachable / disabled。
+        旧实现把两种失败都折叠成 None，导致从服在中心瞬断时把老玩家误判为
+        新人、凭空造 0 行整行覆盖中心统计（时长/次数清零事故根源）。
+        """
         client = getattr(self, "sync_client", None)
         if client is None or not getattr(client, "is_running", lambda: False)():
-            return None
+            return "disabled", None
         if "player_basic_info" not in getattr(client, "enabled_tables", set()):
-            return None
+            return "disabled", None
         try:
-            return client.pull_one(
+            rows = client.pull_rows(
                 "player_basic_info",
                 "xuid = ?",
                 [str(xuid)],
@@ -4178,7 +4194,15 @@ class ARCCorePlugin(Plugin):
             )
         except Exception as e:
             self._safe_log("warning", f"[ARC Core]Pull basic info from hub error: {e}")
-            return None
+            return "unreachable", None
+        if rows is None:
+            return "unreachable", None
+        if not rows:
+            return "missing", None
+        row = rows[0]
+        if not row or str(row.get("xuid") or "") != str(xuid):
+            return "missing", None
+        return "ok", dict(row)
 
     def _cache_basic_info_row_locally(self, row: Dict[str, Any]) -> None:
         """从服把中心权威行写入本地缓存（抑制上行，避免回推脏数据）。"""
@@ -17588,17 +17612,24 @@ class ARCCorePlugin(Plugin):
             now_iso = _dt.now().isoformat(timespec="seconds")
             self._play_session_start[xuid] = int(_time.time())
             row = self.database_manager.query_one(
-                "SELECT session_count FROM player_basic_info WHERE xuid = ?",
+                "SELECT session_count, total_playtime FROM player_basic_info WHERE xuid = ?",
                 (xuid,),
             )
             if not row:
                 return
-            session_count = int(row.get("session_count") or 0) + 1
+            old_session = int(row.get("session_count") or 0)
+            old_playtime = int(row.get("total_playtime") or 0)
+            session_count = old_session + 1
             self.database_manager.update(
                 table="player_basic_info",
                 data={"session_count": session_count, "last_join_time": now_iso},
                 where="xuid = ?",
                 params=(xuid,),
+            )
+            append_player_sync_log(
+                self._player_sync_log_path,
+                f"[本机进服] 主服 {name}({xuid}) 次数 {old_session}→{session_count}"
+                f" | 总时长 {old_playtime}s（退服时累加本次） | 进服时间 {now_iso}",
             )
         except Exception as e:
             if self.logger:
@@ -17614,10 +17645,23 @@ class ARCCorePlugin(Plugin):
             if not name or not xuid:
                 return
             now_iso = _dt.now().isoformat(timespec="seconds")
-            remote = self._pull_basic_info_from_hub(xuid, timeout=5.0)
-            if remote and str(remote.get("xuid") or "") == xuid:
-                row = dict(remote)
-            else:
+            status, row = self._pull_basic_info_from_hub_ex(xuid, timeout=5.0)
+            if status in ("unreachable", "disabled"):
+                # 中心连不上≠玩家是新号：此时凭空造 0 行上报会把老玩家的
+                # 时长/次数清零覆盖中心。只开始本地计时，退服时再结算上报。
+                self._play_session_start[xuid] = int(_time.time())
+                self._safe_log(
+                    "warning",
+                    f"[ARC Core]Join report skipped for {name}: hub unreachable"
+                    f" (status={status}); timer started, will settle on quit",
+                )
+                append_player_sync_log(
+                    self._player_sync_log_path,
+                    f"[进服上报跳过] 从服本地 {name}({xuid}) 中心不可达({status})，"
+                    f"已开始计时，退服时再结算（防覆盖中心数据）",
+                )
+                return
+            if status == "missing":
                 row = {
                     "uuid": str(getattr(player, "unique_id", "") or ""),
                     "xuid": xuid,
@@ -17671,17 +17715,23 @@ class ARCCorePlugin(Plugin):
             now_iso = _dt.now().isoformat(timespec="seconds")
             delta = max(0, int(_time.time()) - int(started)) if started is not None else 0
             row = self.database_manager.query_one(
-                "SELECT total_playtime FROM player_basic_info WHERE xuid = ?",
+                "SELECT total_playtime, session_count FROM player_basic_info WHERE xuid = ?",
                 (xuid,),
             )
             if not row:
                 return
-            total = int(row.get("total_playtime") or 0) + delta
+            old_playtime = int(row.get("total_playtime") or 0)
+            total = old_playtime + delta
             self.database_manager.update(
                 table="player_basic_info",
                 data={"total_playtime": total, "last_quit_time": now_iso},
                 where="xuid = ?",
                 params=(xuid,),
+            )
+            append_player_sync_log(
+                self._player_sync_log_path,
+                f"[本机退服] 主服 {name or '?'}({xuid}) 本次 +{delta}s"
+                f" | 总时长 {old_playtime}s→{total}s | 退服时间 {now_iso}",
             )
         except Exception as e:
             if self.logger:
@@ -17704,10 +17754,23 @@ class ARCCorePlugin(Plugin):
                 started = self._play_session_start.pop(name, None)
             now_iso = _dt.now().isoformat(timespec="seconds")
             delta = max(0, int(_time.time()) - int(started)) if started is not None else 0
-            remote = self._pull_basic_info_from_hub(xuid, timeout=5.0)
-            if remote and str(remote.get("xuid") or "") == xuid:
+            status, remote = self._pull_basic_info_from_hub_ex(xuid, timeout=5.0)
+            if status == "ok":
                 row = dict(remote)
             else:
+                if status in ("unreachable", "disabled"):
+                    # 中心不可达：退回本地缓存行结算（中心侧有只增不减防护兜底），
+                    # 绝不本地清零后上报。
+                    self._safe_log(
+                        "warning",
+                        f"[ARC Core]Quit report falls back to local cache for"
+                        f" {name or xuid}: hub unreachable (status={status})",
+                    )
+                    append_player_sync_log(
+                        self._player_sync_log_path,
+                        f"[退服上报降级] 从服本地 {name or '?'}({xuid}) 中心不可达"
+                        f"({status})，按本地缓存行结算（中心侧有回退防护）",
+                    )
                 local = self.database_manager.query_one(
                     "SELECT * FROM player_basic_info WHERE xuid = ?",
                     (xuid,),

@@ -232,6 +232,30 @@ class SyncServer:
         ctx["event"] = event
         return ctx
 
+    def _fill_basic_info_uuid(self, row_data: Dict[str, Any]) -> None:
+        """player_basic_info 整行 uuid 为空时按 xuid 补齐。
+
+        uuid 是表主键且 SQLite 主键允许 NULL（NULL != NULL），空 uuid 的
+        INSERT OR REPLACE 永远撞不上旧行，会不断插入带旧快照值的重复行，
+        正是"从服统计被悄悄覆盖"的根源。已有行则复用其 uuid；全新玩家
+        用 recovered-<xuid> 占位（玩家上线时覆写为真实 unique_id）。
+        """
+        if str(row_data.get("uuid") or "").strip():
+            return
+        xuid = str(row_data.get("xuid") or "").strip()
+        if not xuid:
+            return
+        try:
+            rows = query_sync_table(self.db, "player_basic_info", "xuid = ?", (xuid,))
+        except Exception:
+            rows = []
+        for row in rows:
+            existing = str(row.get("uuid") or "").strip()
+            if existing:
+                row_data["uuid"] = existing
+                return
+        row_data["uuid"] = f"recovered-{xuid}"
+
     def _audit_basic_info_after(
         self,
         client: ConnectedClient,
@@ -666,6 +690,8 @@ class SyncServer:
             if phys == "player_basic_info" and isinstance(data.get("data"), dict):
                 audit_ctx = self._audit_basic_info_payload(client, data, log_label)
             row_data = dict(data.get("data") or {})
+            if phys == "player_basic_info" and push_op == "insert":
+                self._fill_basic_info_uuid(row_data)
             with self.db.suppress_write_notify():
                 if push_op == "insert":
                     success = self.db.upsert(phys, row_data)
@@ -796,6 +822,8 @@ class SyncServer:
                     audit_ctx = self._audit_basic_info_payload(
                         client, op, f"Batch/{op.get('type', '?')}"
                     )
+                    if op.get("type") == "insert":
+                        self._fill_basic_info_uuid(op["data"])
                 result = self._run_batch_op(op.get("type"), table_name, op)
                 results.append(result)
                 if audit_ctx is not None:

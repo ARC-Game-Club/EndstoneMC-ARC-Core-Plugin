@@ -4082,7 +4082,92 @@ class ARCCorePlugin(Plugin):
             self._upgrade_player_basic_table()
         local_ok = self.init_player_local_table()
         self._migrate_player_basic_info_split()
+        self._dedupe_player_basic_info_rows()
         return bool(result and local_ok)
+
+    def _dedupe_player_basic_info_rows(self) -> None:
+        """按 xuid 去重 player_basic_info 历史重复行，并给 xuid 建唯一索引。
+
+        SQLite 主键 uuid 允许 NULL（NULL != NULL），从服空 uuid 的整行
+        upsert 曾不断插入重复行（同 xuid 最多 30 行），查询/记账随机命中
+        旧快照，表现为统计被悄悄覆盖。合并策略：计数取各组最大值，进退服
+        时间取最新，uuid 取首个非空（否则占位 recovered-<xuid>），其余行删除。
+        """
+        try:
+            dup_groups = self.database_manager.query_all(
+                "SELECT xuid FROM player_basic_info GROUP BY xuid HAVING COUNT(*) > 1"
+            )
+            if not dup_groups:
+                return
+            removed = 0
+            for group in dup_groups:
+                xuid = str(group.get("xuid") or "")
+                rows = self.database_manager.query_all(
+                    "SELECT rowid, uuid, total_playtime, session_count, "
+                    "last_join_time, last_quit_time FROM player_basic_info WHERE xuid = ?",
+                    (xuid,),
+                )
+                if len(rows) < 2:
+                    continue
+                keep = max(
+                    rows,
+                    key=lambda r: (
+                        int(r.get("total_playtime") or 0),
+                        int(r.get("session_count") or 0),
+                    ),
+                )
+                keep_rowid = keep.get("rowid")
+                merged_uuid = next(
+                    (
+                        str(r.get("uuid"))
+                        for r in rows
+                        if str(r.get("uuid") or "").strip()
+                    ),
+                    f"recovered-{xuid}",
+                )
+                # 先删后改：merged_uuid 可能正被待删行占用，顺序反了会撞唯一键
+                self.database_manager.execute_and_get_rowcount(
+                    "DELETE FROM player_basic_info WHERE xuid = ? AND rowid != ?",
+                    (xuid, keep_rowid),
+                )
+                self.database_manager.execute(
+                    "UPDATE player_basic_info SET uuid = ?, total_playtime = ?, "
+                    "session_count = ?, last_join_time = ?, last_quit_time = ? "
+                    "WHERE rowid = ?",
+                    (
+                        merged_uuid,
+                        max(int(r.get("total_playtime") or 0) for r in rows),
+                        max(int(r.get("session_count") or 0) for r in rows),
+                        max(
+                            (r.get("last_join_time") for r in rows if r.get("last_join_time")),
+                            default=None,
+                        ),
+                        max(
+                            (r.get("last_quit_time") for r in rows if r.get("last_quit_time")),
+                            default=None,
+                        ),
+                        keep_rowid,
+                    ),
+                )
+                removed += 1
+            self.database_manager.execute(
+                "UPDATE player_basic_info SET uuid = 'recovered-' || xuid "
+                "WHERE uuid IS NULL OR trim(uuid) = ''"
+            )
+            self.database_manager.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_player_basic_info_xuid "
+                "ON player_basic_info(xuid)"
+            )
+            self._safe_log(
+                "info",
+                f"[ARC Core]Deduped player_basic_info: removed {removed} "
+                f"duplicate rows across {len(dup_groups)} xuids",
+            )
+        except Exception as e:
+            self._safe_log(
+                "warning",
+                f"{ColorFormat.RED}[ARC Core]Dedupe player_basic_info error: {e}",
+            )
 
     def _hash_password(self, password: str) -> str:
         """

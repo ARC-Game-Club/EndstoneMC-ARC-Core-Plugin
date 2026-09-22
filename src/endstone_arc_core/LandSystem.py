@@ -886,17 +886,17 @@ class LandSystem:
                     continue
                 is_existing_public = self.is_public_land_owner(land.get("owner_xuid"))
                 if creating_priority is not None:
-                    # 公共盖公共：仅可覆盖更低优先级；同级/更高仍冲突
+                    # 公共盖公共：仅同级别冲突；不同级别可互相圈入，生效时取最高级
                     if is_existing_public:
                         exist_priority = self.clamp_public_priority(
                             land.get("public_priority", 1)
                         )
-                        if exist_priority < creating_priority:
+                        if exist_priority != creating_priority:
                             continue
                     elif creating_allow_non_public_land:
                         # 允许私人/公会与本公共共存：跳过私人/公会重叠
                         continue
-                    # 私人/公会（未允许）或同级及以上公共：进入重叠判定
+                    # 私人/公会（未允许）或同级公共：进入重叠判定
                 else:
                     # 私人/公会：可在允许圈私人的公共领地内创建
                     if is_existing_public and land.get("allow_non_public_land", 0):

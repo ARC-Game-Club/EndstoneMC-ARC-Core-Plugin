@@ -356,17 +356,22 @@ class ARCCorePlugin(Plugin):
         :param level: 日志级别 (info, warning, error)
         :param message: 日志消息
         """
-        if hasattr(self, 'logger') and self.logger is not None:
-            if level.lower() == 'info':
-                self.logger.info(message)
-            elif level.lower() == 'warning':
-                self.logger.warning(message)
-            elif level.lower() == 'error':
-                self.logger.error(message)
+        try:
+            if hasattr(self, 'logger') and self.logger is not None:
+                if level.lower() == 'info':
+                    self.logger.info(message)
+                elif level.lower() == 'warning':
+                    self.logger.warning(message)
+                elif level.lower() == 'error':
+                    self.logger.error(message)
+                else:
+                    self.logger.info(message)
             else:
-                self.logger.info(message)
-        else:
-            # 如果logger未初始化，使用print
+                # 如果logger未初始化，使用print
+                print(f"[{level.upper()}] {message}")
+        except Exception:
+            # __init__ 阶段 Endstone 原生 logger 尚未就绪，属性非 None 但
+            # 调用会抛 "Attempted a typeid of nullptr pointer!"，兜底退回 print
             print(f"[{level.upper()}] {message}")
 
     def _ensure_newbie_files_exist(self):

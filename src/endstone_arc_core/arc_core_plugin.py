@@ -2592,7 +2592,10 @@ class ARCCorePlugin(Plugin):
         player.send_message(msg)
 
     def _ensure_land_claim_allowed(self, player: Player) -> bool:
+        """ALLOW_LAND_CLAIM 只限制普通玩家新建领地；OP 豁免（选点/公共领地/公会领地都要 OP 来建）。"""
         if self._is_land_claim_allowed():
+            return True
+        if getattr(player, "is_op", False):
             return True
         self._notify_land_claim_disabled(player)
         return False
@@ -12633,8 +12636,12 @@ class ARCCorePlugin(Plugin):
         state = self.player_land_creation_pick.get(name)
         if not state:
             return False
-        # 新建圈地选点受 ALLOW_LAND_CLAIM 限制；调整已有领地范围不受影响
-        if state.get("resize_land_id") is None and not self._is_land_claim_allowed():
+        # 新建圈地选点受 ALLOW_LAND_CLAIM 限制（OP 豁免）；调整已有领地范围不受影响
+        if (
+            state.get("resize_land_id") is None
+            and not getattr(player, "is_op", False)
+            and not self._is_land_claim_allowed()
+        ):
             self.clear_new_land_creation_info_memory(player)
             self._notify_land_claim_disabled(player)
             event.is_cancelled = True

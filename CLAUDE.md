@@ -41,6 +41,8 @@ Tests live in `tests/` (plain `unittest`, no external deps): run with `python -m
 | `SettingManager.py` | Config via `core_setting.yml` (`KEY=VALUE` format); class-level dict cache |
 | `EntityDisplayNameManager.py` | Entity display name lookups from `entity_display_name.txt` |
 | `sky_eye_log.py` | Independent SQLite audit log at `plugins/ARCCore/sky_eye/skyeye.db` with retention pruning and query APIs |
+| `newbie_book.py` | Book-style newbie guide storage: `newbie_book.json` (title/intro/sections/chapters), default seed, one-time migration from legacy `newbie_welcome.txt`, atomic save, plain-text dump for APIs |
+| `newbie_book_ui.py` | Player book UI (cover intro → section buttons → chapters with prev/next) + OP in-game editor (every edit saves to `newbie_book.json` and takes effect immediately) |
 | `arc_error_log.py` | Thread-safe error logging to `error_log.txt` |
 | `mc_command_format.py` | Utility: quote player names containing spaces for MC commands |
 | `ui_icons.py` | Form-button icon path constants (client RP 弧光核心RP `textures/arc_core/*.png`, always with `.png`). Main-menu buttons fall back to `DEFAULT` (ARC logo) when a plugin registers without `icon`; `UI_ICONS_ENABLED` (default on) disables all form icons |
@@ -55,7 +57,8 @@ Tests live in `tests/` (plain `unittest`, no external deps): run with `python -m
    - `core_setting.yml` — `KEY=VALUE` pairs (not real YAML; parsed line-by-line)
    - `ZH-CN.txt` — language strings, same `KEY=VALUE` format
    - `broadcast.txt` — one broadcast message per line, supports `{date}`, `{time}`, `{online_player_number}` placeholders
-   - `newbie_welcome.txt` / `newbie_commands.txt` — new-player welcome content and auto-commands (`{player}` placeholder)
+   - `newbie_book.json` — 书式新手引导（封面简介 + 板块 + 章节），OP 面板·新手书编辑在游戏内维护，改完即时生效
+   - `newbie_commands.txt` — new-player auto-commands (`{player}` placeholder)；`newbie_welcome.txt` 仅作 0.9.80 迁移源（已并入书的「旧版教学」板块），不再在进服时刷屏
    - `entity_display_name.txt` — `entity.minecraft.xxx.name=DisplayName`
    - （成就定义已迁至独立插件 `plugins/ARCAchievement/achievements.json`）
 
@@ -103,7 +106,7 @@ Other EndStone plugins can call methods on the `ARCCorePlugin` instance via `ser
 - **Sky Eye**: `api_sky_eye_query`、`api_sky_eye_query_text`、`api_sky_eye_player_now`
 - **Teleport**: `api_teleport_player_to`、`api_list_player_homes`、`api_list_public_warps`、`api_teleport_player_to_home`、`api_teleport_player_to_warp`
 - **Guilds**: 已拆出至独立插件 `arc_guild`（`EndstoneMC-ARC-Guild`）。其它插件请直接调用该插件 API；核心仅保留软依赖（领地/击杀/签到/前缀），查询失败一律视为无公会。
-- **Newbie**: `api_get_newbie_guide_text()`
+- **Newbie**: `api_get_newbie_guide_text()`（书式手册摊平文本，超长截断）、`api_get_newbie_book()`（完整书结构 dict：title/intro/sections[chapters]）
 - **Main menu**: `api_register_main_menu_button(button_id, text, on_click, priority=6)`、`api_unregister_main_menu_button(button_id)` — 其它插件在 `on_enable` 注册主菜单入口；priority 越小越靠前（签到未签到=0、已签到=99；核心其它功能从 3 起）
 - **Chat prefixes**: `api_register_chat_prefix(prefix_name, priority=0)`、`api_set_player_chat_prefix(prefix_name, text, player_name="", xuid="", visible=None)`、`api_set_player_chat_prefix_visible(prefix_name, visible, player_name="", xuid="")` — 展示名前缀按 priority 升序拼接（越小越靠前，最低 0）。核心内置仅 `title=3`；`guild=2` 由 `arc_guild` 注册，文本为公会名。`text` 置空且未传 `visible` 则清除；`visible=False` 隐藏但保留原文（如倒地/复活）。`text` 传 `None` 可只改显隐。
 - **Cross-server plugin sync**: `api_sync_register_namespace(plugin_id, tables, on_apply)`、`api_sync_unregister_namespace(plugin_id)`、`api_sync_upsert(plugin_id, table, row)`、`api_sync_delete(plugin_id, table, where, params=None)`、`api_sync_list_namespaces()`、`api_sync_namespace_status(plugin_id)` — 第三方插件把自有表纳入跨服同步；业务数据仍在插件自己的 SQLite，下行经 `on_apply(namespace, table, op, data)` 写回。`op` 为 `full`/`upsert`/`delete`。

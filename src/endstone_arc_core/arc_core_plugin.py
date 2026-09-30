@@ -41,6 +41,8 @@ from endstone_arc_core.sync_player_audit import append_player_sync_log
 from endstone_arc_core.SidebarSystem import SidebarSystem
 from endstone_arc_core import bedrock_glyphs
 from endstone_arc_core import ui_icons
+from endstone_arc_core.newbie_book import NewbieBookStore, book_to_plain_text
+from endstone_arc_core.newbie_book_ui import NewbieBookOpUi, NewbieBookUi
 
 MAIN_PATH = 'plugins/ARCCore'
 # 旧版一次性导入占位 uuid 前缀（进服时覆写为真实 unique_id）
@@ -327,6 +329,14 @@ class ARCCorePlugin(Plugin):
         self.newbie_command_lines: List[str] = []
         self._ensure_newbie_files_exist()
         self._load_newbie_files()
+        # 书式新手引导：newbie_book.json（旧 newbie_welcome.txt 仅作迁移源）
+        self.newbie_book = NewbieBookStore(
+            Path(MAIN_PATH), legacy_welcome_path=self.newbie_welcome_file
+        )
+        self._newbie_book_join_pending: Set[str] = set()
+        self.newbie_book_auto_open_on_join = True
+        self.newbie_book_auto_open_delay_ticks = 100
+        self._read_newbie_book_settings()
 
         # 金钱排行榜设置
         self.hide_op_in_money_ranking = self.setting_manager.GetSetting('HIDE_OP_IN_MONEY_RANKING')
@@ -430,21 +440,35 @@ class ARCCorePlugin(Plugin):
             self.newbie_command_lines = []
             self._safe_log("error", f"[ARC Core]Load newbie commands error: {e}")
 
-    def _send_newbie_welcome_message(self, player: Player):
-        """发送新人欢迎消息（使用内存缓存，不读盘）。"""
+    def _read_newbie_book_settings(self) -> None:
+        """读新手书进服行为配置；缺省 = 自动打开、延迟 5 秒。"""
+        raw_auto = self.setting_manager.get_existing('NEWBIE_BOOK_AUTO_OPEN_ON_JOIN')
+        if raw_auto is None or not str(raw_auto).strip():
+            self.newbie_book_auto_open_on_join = True
+        else:
+            self.newbie_book_auto_open_on_join = (
+                str(raw_auto).strip().lower()
+                not in ("false", "0", "no", "off", "否", "关闭")
+            )
+        raw_delay = self.setting_manager.get_existing('NEWBIE_BOOK_AUTO_OPEN_DELAY_SEC')
         try:
-            welcome_content = (self.newbie_welcome_text or "").strip()
-            if welcome_content:
-                for message in welcome_content.split("\n"):
-                    if message.strip():
-                        player.send_message(f"§e[欢迎] §f{message.strip()}")
-                self.logger.info(f"[ARC Core]Sent welcome message to new player: {player.name}")
-            else:
-                self.logger.warning(
-                    f"[ARC Core]Welcome text is empty: {self.newbie_welcome_file}"
+            delay_sec = int(float(str(raw_delay).strip()))
+        except (ValueError, TypeError):
+            delay_sec = 5
+        self.newbie_book_auto_open_delay_ticks = max(10, delay_sec * 20)
+
+    def _send_newbie_welcome_hint(self, player: Player):
+        """新玩家进服只发一条简短提示（书由进服延迟表单自动打开，不再聊天刷屏）。"""
+        try:
+            hint = self.language_manager.GetText('NEWBIE_BOOK_JOIN_HINT')
+            if not hint:
+                hint = (
+                    "§e[欢迎] §f新玩家你好！已为你打开《新手手册》，可点「返回」进入主菜单；"
+                    "之后随时在 §b/arc§r 里点 §a新手引导§r 回看。"
                 )
+            self._send_text(player, hint)
         except Exception as e:
-            self.logger.error(f"[ARC Core]Failed to send welcome message to {player.name}: {str(e)}")
+            self.logger.error(f"[ARC Core]Failed to send welcome hint to {player.name}: {str(e)}")
 
     def _execute_newbie_commands(self, player: Player):
         """执行新人指令（使用内存缓存，不读盘）。"""
@@ -1142,8 +1166,11 @@ class ARCCorePlugin(Plugin):
 
         # 如果是新玩家，执行新人欢迎功能
         if is_new_player and success:
-            self._send_newbie_welcome_message(player)
+            self._send_newbie_welcome_hint(player)
             self._execute_newbie_commands(player)
+            # 新玩家首次进服：延迟表单直接弹新手书（替代主菜单自动弹出）
+            if self.newbie_book_auto_open_on_join:
+                self._newbie_book_join_pending.add(str(player.name))
 
         self._broadcast_text(
             self.language_manager.GetText('PLAYER_JOIN_MESSAGE').format(player.name)
@@ -1241,10 +1268,17 @@ class ARCCorePlugin(Plugin):
         self.run_player_task(player, _join_hints, delay=6)
         self.run_player_task(player, _join_sky_eye, delay=8)
         self.run_player_task(player, _join_sidebar, delay=join_delay_ticks)
+        join_menu_delay = 20
+        if (
+            is_new_player
+            and success
+            and self.newbie_book_auto_open_on_join
+        ):
+            join_menu_delay = max(20, self.newbie_book_auto_open_delay_ticks)
         self.run_player_task(
             player,
             self._show_join_arc_main_menu_with_delay,
-            delay=20,
+            delay=join_menu_delay,
         )
 
     def _sky_eye_player_key(self, player: Optional[Player]) -> str:
@@ -1270,7 +1304,11 @@ class ARCCorePlugin(Plugin):
         return bool(key) and key in self._sky_eye_ready_xuids
 
     def _show_join_arc_main_menu_with_delay(self, player: Player):
-        """进服后延迟弹出主菜单一次（与配置无关）；玩家可关闭表单，随时可用 /arc 再次打开。"""
+        """进服后延迟弹出主菜单一次（与配置无关）；新玩家首次进服改为弹新手书。"""
+        if str(player.name) in self._newbie_book_join_pending:
+            self._newbie_book_join_pending.discard(str(player.name))
+            self.show_newbie_welcome_panel(player)
+            return
         self.show_main_menu(player)
 
     @event_handler
@@ -5016,6 +5054,25 @@ class ARCCorePlugin(Plugin):
         except (TypeError, ValueError):
             return str(raw).strip() in ("0", "false", "False")
 
+    @staticmethod
+    def _modal_parse_amount(data: list) -> Optional[float]:
+        """从 ModalForm 提交数据中解析金额输入框的值。
+
+        新版客户端提交自定义表单时会跳过 Label 等非交互控件（旧版提交 null 占位），
+        带说明文字的表单若按固定下标取值会错位取到下拉框索引。
+        文本输入框的值在响应中始终是字符串，因此取第一个可解析为数字的字符串项。
+        """
+        if not isinstance(data, list):
+            return None
+        for item in data:
+            if not isinstance(item, str):
+                continue
+            try:
+                return float(str(item).strip())
+            except ValueError:
+                continue
+        return None
+
     # UI Main menu
     def show_main_menu(self, player: Player):
         self.update_player_name(player)
@@ -5547,25 +5604,19 @@ class ARCCorePlugin(Plugin):
     def execute_suicide(self, player: Player):
         player.perform_command('suicide')
 
-    def show_newbie_welcome_panel(self, player: Player):
-        """显示新手引导面板，内容来自内存中的 newbie_welcome.txt"""
-        welcome_content = self.newbie_welcome_text or ""
-        if not str(welcome_content).strip():
-            welcome_content = (
-                self.language_manager.GetText("NEWBIE_GUIDE_PANEL_TITLE")
-                + "\n\n（引导文件暂未配置）"
-            )
-        newbie_form = ActionForm(
-            title=self.language_manager.GetText('NEWBIE_GUIDE_PANEL_TITLE'),
-            content=welcome_content,
-            on_close=None,
-        )
-        newbie_form.add_button(
-            self.language_manager.GetText('RETURN_BUTTON_TEXT'),
-            icon=self._ui_icon(ui_icons.BACK),
-            on_click=self.show_main_menu
-        )
-        player.send_form(newbie_form)
+    def _newbie_book_ui(self) -> NewbieBookUi:
+        if not getattr(self, "newbie_book_ui", None):
+            self.newbie_book_ui = NewbieBookUi(self)
+        return self.newbie_book_ui
+
+    def _newbie_book_op_ui(self) -> NewbieBookOpUi:
+        if not getattr(self, "newbie_book_op_ui", None):
+            self.newbie_book_op_ui = NewbieBookOpUi(self)
+        return self.newbie_book_op_ui
+
+    def show_newbie_welcome_panel(self, player: Player, on_back=None):
+        """新手引导 = 书式手册：封面简介 → 板块按钮 → 章节（内容来自 newbie_book.json）。"""
+        self._newbie_book_ui().show_cover(player, on_back=on_back)
 
     # Player info & invite system UI
     def show_my_info_panel(self, player: Player):
@@ -6083,8 +6134,18 @@ class ARCCorePlugin(Plugin):
         return len(views)
 
     def api_get_newbie_guide_text(self) -> str:
-        """供其他插件调用：返回新手引导文本全文（与内存中的 newbie_welcome.txt、主菜单新手引导一致）。"""
-        return str(self.newbie_welcome_text or "").strip()
+        """供其他插件调用：新手引导全文（来自书式新手手册 newbie_book.json 的摊平文本，超长截断）。"""
+        try:
+            return book_to_plain_text(self.newbie_book.get_book())
+        except Exception:
+            return ""
+
+    def api_get_newbie_book(self) -> dict:
+        """供其他插件调用：返回书式新手手册完整结构（title/intro/sections[+chapters]）。"""
+        try:
+            return dict(self.newbie_book.get_book())
+        except Exception:
+            return {}
 
     def _landmark_dim_label(self, dimension: str) -> str:
         dim = str(dimension or "").strip() or "-"
@@ -8194,14 +8255,18 @@ class ARCCorePlugin(Plugin):
             default_index=0,
         )
 
-        def try_deposit(sender: Player, data: list):
+        def try_deposit(sender: Player, json_str: str):
+            if self.logger:
+                self.logger.info(f"[ARC Core]Fixed deposit submit player={sender.name!r} raw={json_str}")
+            try:
+                data = json.loads(json_str)
+            except (ValueError, TypeError):
+                data = []
             if self._modal_choice_is_back(data, 0):
                 self.show_fixed_deposit_create_panel(sender)
                 return
-            try:
-                amount = self._round_money(float(data[2]))
-            except (ValueError, TypeError):
-                amount = None
+            raw_amount = self._modal_parse_amount(data)
+            amount = self._round_money(raw_amount) if raw_amount is not None else None
             if amount is None or amount <= 0:
                 self._open_fixed_deposit_result(
                     sender,
@@ -8217,7 +8282,8 @@ class ARCCorePlugin(Plugin):
                 )
                 return
             try:
-                term_months = terms[int(data[3])]
+                # 存期下拉框是表单最后一个控件；无论客户端是否为 Label 提交占位，末位都是它
+                term_months = terms[int(data[-1])]
             except (ValueError, TypeError, IndexError):
                 term_months = terms[0]
             if not self.decrease_player_money(sender, amount, notify=False):
@@ -14383,6 +14449,9 @@ class ARCCorePlugin(Plugin):
         op_main_panel.add_button(self.language_manager.GetText('OP_CORE_SETTINGS_BUTTON'),
                                  icon=self._ui_icon(ui_icons.OP_SETTINGS),
                                  on_click=self.show_op_core_settings_panel)
+        op_main_panel.add_button(self.language_manager.GetText('NEWBIE_BOOK_ENTRY') or '新手书编辑',
+                                 icon=self._ui_icon(ui_icons.NEWBIE),
+                                 on_click=lambda p: self._newbie_book_op_ui().show_menu(p))
         op_main_panel.add_button(self.language_manager.GetText('OP_TOOLS_ENTRY'),
                                  icon=self._ui_icon(ui_icons.TOOLS),
                                  on_click=self.show_op_tools_panel)
@@ -14978,6 +15047,7 @@ class ARCCorePlugin(Plugin):
             self._reapply_cached_settings()
             self._load_broadcast_messages()
             self._load_newbie_files()
+            self.newbie_book.reload()
             self.language_manager.ReloadCurrentLanguage()
             self.entity_display_name_manager.reload()
             if self.sync_server and self.sync_server.is_running():
@@ -14994,6 +15064,7 @@ class ARCCorePlugin(Plugin):
     def _reapply_cached_settings(self):
         """重载配置后重新应用从 core_setting 读取的缓存项"""
         try:
+            self._read_newbie_book_settings()
             self.broadcast_interval = self.setting_manager.GetSetting('BROADCAST_INTERVAL')
             try:
                 self.broadcast_interval = int(self.broadcast_interval)

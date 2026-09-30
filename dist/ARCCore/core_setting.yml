@@ -226,3 +226,9 @@ SIDEBAR_MAX_LINES=15
 # 配色约定：§8 分割/弱化，§7 标签，§f 主要数字，§6 标题/重点（灰橙）
 # 可用占位符：{time}{date}{player}{money}{hp}{max_hp}{food}{tps}{mspt}{online}{max_players}{ping}{mc_time}{title}{guild}{page}{page_total}
 SIDEBAR_MAIN_LINES=
+
+# ---- 书式新手引导（0.9.80+）----
+# 新玩家首次进服是否自动弹出新手书（关闭则只发一条聊天提示）
+NEWBIE_BOOK_AUTO_OPEN_ON_JOIN=True
+# 自动弹出的延迟（秒）；期间玩家可先看到进服提示
+NEWBIE_BOOK_AUTO_OPEN_DELAY_SEC=5

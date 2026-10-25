@@ -1164,8 +1164,16 @@ class ARCCorePlugin(Plugin):
         # 在玩家加入时立即初始化玩家数据（基本信息和经济数据）
         success, is_new_player = self.ensure_player_data_initialized(player)
 
+        # AI 假人（合成身份）不是真新人：不欢迎、不发新人书，
+        # 数据照常初始化（它有自己的 xuid 行）。
+        try:
+            is_ai_bot = (not str(player.xuid or "").strip()
+                         and bool(self._resolve_xuid(player)))
+        except Exception:
+            is_ai_bot = False
+
         # 如果是新玩家，执行新人欢迎功能
-        if is_new_player and success:
+        if is_new_player and success and not is_ai_bot:
             self._send_newbie_welcome_hint(player)
             self._execute_newbie_commands(player)
             # 新玩家首次进服：延迟表单直接弹新手书（替代主菜单自动弹出）
@@ -4230,7 +4238,7 @@ class ARCCorePlugin(Plugin):
             default_free_blocks = int(
                 self.setting_manager.GetSetting('DEFAULT_FREE_LAND_BLOCKS') or '100'
             )
-            xuid = str(player.xuid)
+            xuid = self._resolve_xuid(player)
             existing = self.database_manager.query_one(
                 "SELECT xuid FROM player_local_info WHERE xuid = ?", (xuid,)
             )
@@ -4267,7 +4275,7 @@ class ARCCorePlugin(Plugin):
         try:
             player_data = {
                 'uuid': str(player.unique_id),
-                'xuid': str(player.xuid),
+                'xuid': self._resolve_xuid(player),
                 'name': player.name,
                 'password': None,
                 'inviter_xuid': None,
@@ -4285,7 +4293,7 @@ class ARCCorePlugin(Plugin):
 
     def init_player_economy_info(self, player: Player) -> bool:
         """初始化玩家经济信息（委托 Economy）"""
-        return self.economy.init_player_economy_by_xuid(str(player.xuid))
+        return self.economy.init_player_economy_by_xuid(self._resolve_xuid(player))
 
     def _is_sync_consumer_client(self) -> bool:
         """从服（ENABLE_SYNC_CLIENT）：时长/次数/新人以同步中心为准。"""
@@ -4370,6 +4378,50 @@ class ARCCorePlugin(Plugin):
             self._safe_log("warning", f"[ARC Core]Hub upsert basic info error: {e}")
             return False
 
+    def _fake_player_identity_api(self):
+        """拿 arc_fake_player 的身份 API（带缓存；没有该插件返回 None）。
+
+        0.9.82：AI 假人（SimulatedPlayer）的 xuid 是空字符串，若直接
+        拿去当主键，所有假人会挤在同一个 player_basic_info / 经济行里。
+        arc_fake_player ≥3.5 为每个假人维护终身稳定的合成 xuid
+        （16 位、9 开头），通过 ``api_resolve_xuid(player)`` 提供。
+        """
+        cached = getattr(self, "_afp_identity_plug", None)
+        if cached is not None:
+            return cached or None
+        plug = None
+        try:
+            pm = getattr(self.server, "plugin_manager", None)
+            if pm is not None:
+                plug = pm.get_plugin("arc_fake_player")
+        except Exception:
+            plug = None
+        if plug is None or not callable(getattr(plug, "api_resolve_xuid", None)):
+            self._afp_identity_plug = False   # 缓存"没有"，别每帧去问
+            return None
+        self._afp_identity_plug = plug
+        return plug
+
+    def _resolve_xuid(self, player: Player) -> str:
+        """玩家 → XUID。真人原样返回；AI 假人返回合成 xuid。
+
+        没装 arc_fake_player 或对方不认领（离线登录的真人）时，
+        维持原行为（可能为空串），调用方自行兜底。
+        """
+        try:
+            real = str(player.xuid)
+        except Exception:
+            return ""
+        if real:
+            return real
+        api = self._fake_player_identity_api()
+        if api is None:
+            return ""
+        try:
+            return str(api.api_resolve_xuid(player) or "")
+        except Exception:
+            return ""
+
     def ensure_player_data_initialized(self, player: Player) -> tuple[bool, bool]:
         """
         确保玩家数据已完全初始化（基本信息和经济数据）
@@ -4377,7 +4429,7 @@ class ARCCorePlugin(Plugin):
         :return: (是否初始化成功, 是否为新玩家)
         """
         try:
-            player_xuid = str(player.xuid)
+            player_xuid = self._resolve_xuid(player)
             success = True
             is_new_player = False
 
@@ -4483,7 +4535,7 @@ class ARCCorePlugin(Plugin):
         try:
             result = self.database_manager.query_one(
                 "SELECT * FROM player_basic_info WHERE xuid = ?",
-                (str(player.xuid),)
+                (self._resolve_xuid(player),)
             )
             if result is None:
                 if self.init_player_basic_info(player):
@@ -6624,7 +6676,7 @@ class ARCCorePlugin(Plugin):
         return self.economy.get_player_money_by_xuid(player_xuid) if player_xuid else 0.0
 
     def get_player_money(self, player: Player) -> float:
-        return self.economy.get_player_money_by_xuid(str(player.xuid))
+        return self.economy.get_player_money_by_xuid(self._resolve_xuid(player))
 
     def _toast_title(self, key: str, fallback: str) -> str:
         """取 toast 标题；按场景套用基岩字形到最前面（会替换旧字形）。"""

@@ -1122,6 +1122,7 @@ class LandSystem:
             return False
 
     def transfer_land(self, land_id: int, new_owner_xuid: str) -> bool:
+        """转让领地：清空授权名单，并复位全部开放类开关（方块互动/公会互动/生物互动/生物伤害/展示框/爆炸）。"""
         try:
             if not self.get_land_info(land_id):
                 return False
@@ -1129,7 +1130,10 @@ class LandSystem:
             if not new_key:
                 return False
             self.db.execute(
-                "UPDATE lands SET owner_xuid = ?, for_sale = 0, sale_price = 0 WHERE land_id = ?",
+                "UPDATE lands SET owner_xuid = ?, for_sale = 0, sale_price = 0, "
+                "shared_users = '[]', allow_public_interact = 0, allow_guild_member_interact = 0, "
+                "allow_actor_interaction = 0, allow_actor_damage = 0, allow_frame = 0, "
+                "allow_explosion = 0 WHERE land_id = ?",
                 (new_key, land_id),
             )
             self._invalidate_land_caches()
@@ -1173,7 +1177,8 @@ class LandSystem:
     ) -> bool:
         """
         买家购买上架领地：须仍为 seller 且 for_sale=1 且 sale_price 与 price 一致。
-        转让后清空出售状态、授权列表，owner_paid_money 记为成交价。
+        转让后清空出售状态、授权列表，并复位全部开放类开关
+        （方块互动/公会互动/生物互动/生物伤害/展示框/爆炸），owner_paid_money 记为成交价。
         """
         try:
             new_key = self.normalize_owner_key_for_write(buyer_owner_key)
@@ -1198,7 +1203,10 @@ class LandSystem:
             ok = bool(
                 self.db.execute(
                     "UPDATE lands SET owner_xuid = ?, for_sale = 0, sale_price = 0, "
-                    "shared_users = '[]', owner_paid_money = ? "
+                    "shared_users = '[]', owner_paid_money = ?, "
+                    "allow_public_interact = 0, allow_guild_member_interact = 0, "
+                    "allow_actor_interaction = 0, allow_actor_damage = 0, allow_frame = 0, "
+                    "allow_explosion = 0 "
                     "WHERE land_id = ? AND owner_xuid = ? AND for_sale = 1 "
                     "AND ABS(sale_price - ?) < 1e-6",
                     (new_key, fp, land_id, seller_owner_key, fp),

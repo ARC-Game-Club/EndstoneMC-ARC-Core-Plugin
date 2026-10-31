@@ -1224,10 +1224,19 @@ class SidebarSystem:
                 self._log_error(f"refresh_all_enabled: {e}")
 
     def _update_online_cache(self) -> None:
+        """在线人数缓存。
+
+        数据源用 ``server.online_players``（引擎真相，**含 SimulatedPlayer**），
+        不用 join 事件维护的字典——SimulatedPlayer 不触发 PlayerJoinEvent
+        （EndStone 已知行为），按事件数会把假人漏掉，侧边栏显示
+        "在线 1 人"而实际上还有 3 个 AI 玩家在玩。事件字典保留做成员
+        判断，计数以引擎为准；引擎读不到时退回字典。
+        """
         try:
-            self._cached_online = len(self._online_by_xuid)
+            players = getattr(self.plugin.server, "online_players", None)
+            self._cached_online = len(list(players)) if players is not None else len(self._online_by_xuid)
         except Exception:
-            self._cached_online = 0
+            self._cached_online = len(self._online_by_xuid)
         try:
             mp = getattr(self.plugin.server, "max_players", None)
             self._cached_max_players = int(mp) if mp is not None else None
@@ -1235,8 +1244,13 @@ class SidebarSystem:
             self._cached_max_players = None
 
     def _refresh_timed_cache(self) -> None:
-        """定时器专用：现实时间 + TPS/MSPT。"""
+        """定时器专用：现实时间 + TPS/MSPT + 在线人数。
+
+        在线人数也放定时器：假人上线不触发进服事件，只有周期性重数
+        才能把它们捡进显示（join/quit 事件触发的 notify_online_changed
+        仍然保留，让真人变动即时生效）。"""
         now = datetime.now()
+        self._update_online_cache()
         self._cached_time = now.strftime("%H:%M")
         self._cached_date = now.strftime("%Y-%m-%d")
         tps = None

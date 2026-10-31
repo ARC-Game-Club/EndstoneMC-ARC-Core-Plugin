@@ -16817,6 +16817,88 @@ class ARCCorePlugin(Plugin):
             self._safe_log("error", f"api_has_land_nearby_chunk error: {str(e)}")
             return False
 
+    def api_claim_land(
+        self,
+        owner_xuid: str,
+        land_name: str,
+        dimension: str,
+        center_x: int,
+        center_z: int,
+        radius: int = 8,
+        tp_x: float = 0.0,
+        tp_y: float = 64.0,
+        tp_z: float = 0.0,
+    ) -> dict:
+        """按中心点+半径圈一块全高领地（供假人插件"自己安家"用）。
+
+        与玩家圈地同规则：本服允许圈地（ALLOW_LAND_CLAIM）、不与现有
+        领地重叠（check_land_availability）、按面积×LAND_PRICE 从
+        **该 xuid 的钱包**扣费（假人钱包与真人同一套经济）。高度取
+        全柱（-64~319），保护最完整。
+        返回 {"ok", "land_id", "cost", "error"}；error 为人话，可直接
+        反馈给假人大脑。
+        """
+        result = {"ok": False, "land_id": None, "cost": 0.0, "error": ""}
+        try:
+            if not self._is_land_claim_allowed():
+                result["error"] = "本服已关闭圈地功能"
+                return result
+            from endstone_arc_core.dimension_utils import normalize_dimension_id
+
+            dim = normalize_dimension_id(dimension)
+            r = max(2, min(24, int(radius)))
+            min_x, max_x = int(center_x) - r, int(center_x) + r
+            min_z, max_z = int(center_z) - r, int(center_z) + r
+            area = (max_x - min_x + 1) * (max_z - min_z + 1)
+            price = 0.0
+            try:
+                price = float(self.land_price or 0)
+            except Exception:
+                price = 0.0
+            cost = round(area * price, 2)
+
+            ok_avail, reason, _overlap = self.check_land_availability(
+                dim, min_x, max_x, -64, 319, min_z, max_z
+            )
+            if not ok_avail:
+                result["error"] = f"这块地和已有领地重叠或不可用（{reason}），换个位置"
+                return result
+            if cost > 0:
+                balance = self.economy.get_player_money_by_xuid(str(owner_xuid))
+                if balance is None or float(balance) < cost:
+                    result["cost"] = cost
+                    result["error"] = (
+                        f"圈地需要 {cost:.0f} 金币，钱包只有 "
+                        f"{float(balance) if balance is not None else 0:.0f}，先攒钱")
+                    return result
+            land_id = self.create_land(
+                str(owner_xuid), str(land_name or "假人的家"), dim,
+                min_x, max_x, -64, 319, min_z, max_z,
+                float(tp_x), float(tp_y), float(tp_z),
+                owner_paid_money=cost,
+            )
+            if land_id is None:
+                result["error"] = "领地创建失败（数据层异常）"
+                return result
+            if cost > 0 and not self.economy.decrease_player_money_by_xuid(
+                    str(owner_xuid), cost):
+                # 建成了却扣不了钱：退地，避免白拿。删地不退费场景不同，
+                # 这里是原子性补救。
+                try:
+                    self.delete_land(int(land_id))
+                except Exception:
+                    pass
+                result["error"] = "扣款失败，已取消圈地"
+                return result
+            result["ok"] = True
+            result["land_id"] = int(land_id)
+            result["cost"] = cost
+            return result
+        except Exception as e:
+            result["error"] = f"圈地异常: {e}"
+            self._safe_log("error", f"api_claim_land error: {e}")
+            return result
+
     def _api_player_is_op(self, xuid: str) -> bool:
         online = self._find_online_player_by_xuid(xuid)
         if online is not None:

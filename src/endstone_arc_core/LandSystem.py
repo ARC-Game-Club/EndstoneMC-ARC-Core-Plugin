@@ -360,6 +360,27 @@ class LandSystem:
         self._cache_put_chunk_lands(dimension, chunk_key, lands)
         return lands
 
+    def has_any_land_nearby_chunk(
+        self, dimension: str, cx: int, cz: int, radius: int = 1
+    ) -> bool:
+        """以区块 (cx, cz) 为中心、radius 格区块半径的范围内是否有任意领地。
+
+        radius=1 即 3x3 区块（约 48x48 格）。走区块映射表 + LRU 缓存，
+        一次最多查 (2*radius+1)^2 个键，供假人插件做动土前的粗粒度避让
+        ——别人领地周边一圈就不动，避免挖墙脚/贴边破坏观感。
+        """
+        try:
+            r = max(0, int(radius))
+            for dx in range(-r, r + 1):
+                for dz in range(-r, r + 1):
+                    if self._load_chunk_lands(
+                            dimension, f"{int(cx) + dx}_{int(cz) + dz}"):
+                        return True
+            return False
+        except Exception as e:
+            self._log("error", f"has_any_land_nearby_chunk error: {str(e)}")
+            return False
+
     def _get_affected_chunks(
         self, min_x: int, max_x: int, min_z: int, max_z: int
     ) -> Set[str]:

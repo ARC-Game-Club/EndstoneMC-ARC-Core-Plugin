@@ -16795,6 +16795,28 @@ class ARCCorePlugin(Plugin):
         except Exception:
             return result
 
+    def api_has_land_nearby_chunk(
+        self, cx: int, cz: int, dimension: str = "overworld", radius: int = 1
+    ) -> bool:
+        """按区块查附近有没有领地：以区块 (cx, cz) 为中心、radius 格区块
+        半径的范围内（radius=1 即 3x3，约 48x48 格）存在任意领地返回 True。
+
+        与 api_check_land_access（按坐标判权限）互补：那个管"这块地能不能
+        动"，这个管"这附近是不是有人圈了地"——假人插件动土前先问这个，
+        别人领地周边一圈就直接换地方，不做贴边挖掘/建造。
+        查询失败按无领地处理（避让层 fail-open，硬闸仍是不动的那个 API）。
+        """
+        try:
+            from endstone_arc_core.dimension_utils import normalize_dimension_id
+
+            dim = normalize_dimension_id(dimension)
+            return self.land_system.has_any_land_nearby_chunk(
+                dim, int(cx), int(cz), radius=int(radius)
+            )
+        except Exception as e:
+            self._safe_log("error", f"api_has_land_nearby_chunk error: {str(e)}")
+            return False
+
     def _api_player_is_op(self, xuid: str) -> bool:
         online = self._find_online_player_by_xuid(xuid)
         if online is not None:

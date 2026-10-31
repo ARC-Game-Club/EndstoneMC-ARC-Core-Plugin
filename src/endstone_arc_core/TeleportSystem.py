@@ -89,6 +89,9 @@ class TeleportSystem:
         )
         self.teleport_cost_random = self._parse_cost("TELEPORT_COST_RANDOM", 100)
         self.teleport_cost_player = self._parse_cost("TELEPORT_COST_PLAYER", 50)
+        # 传回出生地（/spawn 同款）：默认启用、免费（价格可配）
+        self.enable_spawn_teleport = self._parse_bool("ENABLE_SPAWN_TELEPORT", True)
+        self.spawn_teleport_cost = self._parse_cost("SPAWN_TELEPORT_COST", 0)
 
     def _parse_bool(self, key: str, default: bool = True) -> bool:
         raw = self.setting_manager.GetSetting(key)

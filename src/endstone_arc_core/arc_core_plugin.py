@@ -844,16 +844,7 @@ class ARCCorePlugin(Plugin):
             if not isinstance(sender, Player):
                 sender.send_message(f'[ARC Core]This command only works for players.')
                 return True
-            spawn_xyz = self.spawn_pos_dict.get(get_dimension_id(sender.location.dimension))
-            if spawn_xyz is not None:
-                self.server.dispatch_command(
-                    self.server.command_sender,
-                    f'tp {format_mc_command_player_name(sender.name)} '
-                    f'{int(spawn_xyz[0])} {int(spawn_xyz[1])} {int(spawn_xyz[2])}',
-                )
-                sender.send_message(self.language_manager.GetText('PLAYER_TELEPORTED_TO_SPAWN_HINT'))
-            else:
-                sender.send_message(self.language_manager.GetText('NO_SPAWN_POSITION_SET_MESSAGE'))
+            self._teleport_to_spawn(sender)
             return True
         if command.name == "land":
             player = self._resolve_player_for_command_sender(sender)
@@ -8870,6 +8861,40 @@ class ARCCorePlugin(Plugin):
             msg = "[弧光核心]该传送功能已被管理员关闭"
         player.send_message(msg)
 
+    def _teleport_to_spawn(self, player: Player) -> None:
+        """传回出生地：/spawn 命令与传送菜单按钮的统一入口。
+
+        走传送系统同款结算：可配置启用（ENABLE_SPAWN_TELEPORT）与
+        价格（SPAWN_TELEPORT_COST，从玩家钱包扣），传送走
+        execute_teleport_to_position（带天眼日志），扣款失败不发车。
+        """
+        ts = self.teleport_system
+        if not ts.enable_spawn_teleport:
+            self._notify_teleport_feature_disabled(player)
+            return
+        dim = get_dimension_id(player.location.dimension)
+        pos = self.spawn_pos_dict.get(dim)
+        if pos is None or len(pos) < 3:
+            player.send_message(self.language_manager.GetText('NO_SPAWN_POSITION_SET_MESSAGE'))
+            return
+        cost = float(ts.spawn_teleport_cost or 0)
+        if cost > 0:
+            balance = self.get_player_money(player)
+            if balance < cost:
+                player.send_message(
+                    self.language_manager.GetText('TELEPORT_COST_NOT_ENOUGH_MONEY').format(
+                        self._format_money_display(cost),
+                        self._format_money_display(balance),
+                    )
+                )
+                return
+            if not self.decrease_player_money(player, cost):
+                return
+        self.execute_teleport_to_position(
+            player, f"出生地·{dim}",
+            (float(pos[0]), float(pos[1]), float(pos[2])), "SPAWN", dim,
+        )
+
     def show_teleport_menu(self, player: Player):
         teleport_main_menu = ActionForm(
             title=self.language_manager.GetText('TELEPORT_MAIN_MENU_TITLE'),
@@ -8905,6 +8930,18 @@ class ARCCorePlugin(Plugin):
             if ts.teleport_cost_death_location > 0:
                 death_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(death_text, ts.teleport_cost_death_location)
             teleport_main_menu.add_button(death_text, icon=self._ui_icon(ui_icons.DEATH_TP), on_click=self.teleport_to_death_location)
+
+        # 传回出生地按钮（/spawn 同款，可配价格/启用）
+        if ts.enable_spawn_teleport:
+            spawn_text = self.language_manager.GetText('TELEPORT_MAIN_MENU_SPAWN_BUTTON')
+            if not spawn_text or not str(spawn_text).strip():
+                spawn_text = "传回出生地"
+            if ts.spawn_teleport_cost > 0:
+                spawn_text = self.language_manager.GetText('TELEPORT_BUTTON_WITH_COST').format(
+                    spawn_text, ts.spawn_teleport_cost)
+            teleport_main_menu.add_button(
+                spawn_text, icon=self._ui_icon(ui_icons.HOME),
+                on_click=self._teleport_to_spawn)
 
         # 玩家传送请求按钮
         if ts.enable_teleport_player:
@@ -16794,6 +16831,24 @@ class ARCCorePlugin(Plugin):
             return result
         except Exception:
             return result
+
+    def api_get_spawn_point(self, dimension: str = "overworld") -> Optional[dict]:
+        """当前维度的核心出生点（/updatespawnpos 设置的那个，/spawn 传送的目的地）。
+
+        供假人插件等把出生/复活对齐到核心出生点用。返回
+        {"x","y","z","dimension"}；该维度没设置过返回 None。
+        """
+        try:
+            from endstone_arc_core.dimension_utils import normalize_dimension_id
+
+            dim = normalize_dimension_id(dimension)
+            pos = self.spawn_pos_dict.get(dim)
+            if not pos or len(pos) < 3:
+                return None
+            return {"x": float(pos[0]), "y": float(pos[1]),
+                    "z": float(pos[2]), "dimension": dim}
+        except Exception:
+            return None
 
     def api_has_land_nearby_chunk(
         self, cx: int, cz: int, dimension: str = "overworld", radius: int = 1

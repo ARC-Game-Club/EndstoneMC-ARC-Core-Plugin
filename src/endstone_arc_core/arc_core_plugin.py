@@ -36,6 +36,7 @@ from endstone_arc_core.arc_error_log import append_arc_error_log, format_context
 from endstone_arc_core.sky_eye_log import SkyEyeStore, format_sky_eye_records, prune_sky_eye_logs
 from endstone_arc_core.sync_server import SyncServer
 from endstone_arc_core.sync_client import SyncClient
+from endstone_arc_core.mcp_server import MCPServer, generate_mcp_token
 from endstone_arc_core.sync_config import ALL_SHARED_SETTING_KEYS, resolve_sync_consumer_mode
 from endstone_arc_core.sync_player_audit import append_player_sync_log
 from endstone_arc_core.SidebarSystem import SidebarSystem
@@ -206,6 +207,9 @@ class ARCCorePlugin(Plugin):
 
         # 跨服数据同步服务（在 on_enable 中启动，确保 logger 可用）
         self.sync_server: Optional[SyncServer] = None
+        # MCP 远控服务（同样在 on_enable 中启动）
+        self.mcp_server: Optional[MCPServer] = None
+        self._mcp_audit_log_path = str(Path(MAIN_PATH) / "mcp_audit.jsonl")
         self._play_session_start: dict = {}
         self.sync_client: Optional[SyncClient] = None
         from endstone_arc_core.sync_plugin_api import PluginSyncRegistry
@@ -504,6 +508,7 @@ class ARCCorePlugin(Plugin):
         self.register_events(self)
         self.logger.info(f"{ColorFormat.YELLOW}[ARC Core]Plugin enabled!")
         self._init_sync_service()
+        self._init_mcp_server()
         self.economy.set_logger(self.logger)
 
         def _on_arc_persistent_error(error_code: str, detail: str, exc):
@@ -681,6 +686,42 @@ class ARCCorePlugin(Plugin):
         # 本地写库上行/主机写库广播（签到、经济、称号、公会等）
         self.database_manager.set_write_notifier(self._on_db_write_for_sync)
 
+    def _init_mcp_server(self) -> None:
+        """初始化 MCP 远控服务（本服独立配置，不参与跨服同步下发）。
+
+        首次启动 MCP_TOKEN 为空时自动生成并写回 core_setting.yml，
+        服主可在 OP 面板或配置文件中查看/更换。
+        """
+        enabled_raw = (self.setting_manager.GetSetting('MCP_SERVER_ENABLED') or 'True').strip()
+        if enabled_raw.lower() == 'false':
+            self.logger.info("[ARC Core] MCP server disabled by setting.")
+            return
+        port_raw = self.setting_manager.GetSetting('MCP_SERVER_PORT')
+        try:
+            mcp_port = int(port_raw) if port_raw else 19990
+        except (ValueError, TypeError):
+            mcp_port = 19990
+
+        token = (self.setting_manager.GetSetting('MCP_TOKEN') or '').strip()
+        if not token:
+            token = generate_mcp_token()
+            try:
+                self.setting_manager.SetSetting('MCP_TOKEN', token)
+            except Exception as e:
+                self.logger.error(f"[ARC Core] Persist MCP token failed: {e}")
+
+        self.mcp_server = MCPServer(
+            self,
+            bind_port=mcp_port,
+            token=token,
+            logger=self.logger,
+            audit_log_path=self._mcp_audit_log_path,
+        )
+        if self.mcp_server.start():
+            self.logger.info(f"[ARC Core] MCP server started on port {mcp_port} (endpoint /mcp)")
+        else:
+            self.logger.error("[ARC Core] Failed to start MCP server")
+
     def _apply_synced_settings(self, settings: Dict[str, str]) -> None:
         """从服收到同步中心玩法配置后写入本地并刷新缓存。"""
         def apply():
@@ -724,6 +765,12 @@ class ARCCorePlugin(Plugin):
         if self.sync_server and self.sync_server.is_running():
             self.sync_server.stop()
             self.logger.info("[ARC Core] Sync server stopped.")
+        # 停止 MCP 远控服务
+        try:
+            if getattr(self, "mcp_server", None) is not None:
+                self.mcp_server.stop()
+        except Exception:
+            pass
         try:
             if getattr(self, "activity_stats", None) is not None:
                 self.activity_stats.stop_writer()

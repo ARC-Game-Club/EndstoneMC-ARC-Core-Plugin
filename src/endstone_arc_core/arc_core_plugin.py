@@ -710,17 +710,41 @@ class ARCCorePlugin(Plugin):
             except Exception as e:
                 self.logger.error(f"[ARC Core] Persist MCP token failed: {e}")
 
+        # 多服同接一个 MCP 客户端时用前缀防工具撞名（如丧尸服设 zombie_）
+        tool_prefix = (self.setting_manager.GetSetting('MCP_TOOL_PREFIX') or '').strip()
+
         self.mcp_server = MCPServer(
             self,
             bind_port=mcp_port,
             token=token,
             logger=self.logger,
             audit_log_path=self._mcp_audit_log_path,
+            tool_prefix=tool_prefix,
         )
         if self.mcp_server.start():
             self.logger.info(f"[ARC Core] MCP server started on port {mcp_port} (endpoint /mcp)")
         else:
             self.logger.error("[ARC Core] Failed to start MCP server")
+
+    def api_mcp_register_tools(self, plugin_name: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """供其他插件把工具注册进 MCP 服务器（MCP 未启用时返回空结果，不抛错）。"""
+        if getattr(self, "mcp_server", None) is None:
+            return {"registered": [], "rejected": [["", "MCP server not enabled"]]}
+        try:
+            return self.mcp_server.register_plugin_tools(plugin_name, tools)
+        except Exception as e:
+            self.logger.error(f"[ARC Core] api_mcp_register_tools error: {e}")
+            return {"registered": [], "rejected": [["", str(e)]]}
+
+    def api_mcp_unregister_plugin_tools(self, plugin_name: str) -> bool:
+        """注销某插件注册的全部 MCP 工具（MCP 未启用时返回 False）。"""
+        if getattr(self, "mcp_server", None) is None:
+            return False
+        try:
+            return self.mcp_server.unregister_plugin_tools(plugin_name)
+        except Exception as e:
+            self.logger.error(f"[ARC Core] api_mcp_unregister_plugin_tools error: {e}")
+            return False
 
     def _apply_synced_settings(self, settings: Dict[str, str]) -> None:
         """从服收到同步中心玩法配置后写入本地并刷新缓存。"""

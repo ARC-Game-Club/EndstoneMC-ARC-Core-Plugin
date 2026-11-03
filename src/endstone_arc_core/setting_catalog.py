@@ -123,6 +123,7 @@ SETTING_GROUPS: List[Dict[str, object]] = [
             _s("MCP_SERVER_ENABLED", "启用 MCP 远控服务", "bool", choices=BOOL_CHOICES, restart=True),
             _s("MCP_SERVER_PORT", "MCP 端口（仅本机 127.0.0.1）", "int", placeholder="19990", restart=True),
             _s("MCP_TOKEN", "MCP 访问令牌（留空自动生成）", "string", placeholder="", restart=True),
+            _s("MCP_TOOL_PREFIX", "MCP 工具名前缀（多服同接防撞名，如 zombie_）", "string", placeholder="", restart=True),
         ],
     },
     {

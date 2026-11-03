@@ -89,6 +89,7 @@ class MCPServer:
         logger: Any = None,
         audit_log_path: str = "",
         bind_host: str = DEFAULT_BIND_HOST,
+        tool_prefix: str = "",
     ) -> None:
         # plugin：ARCCorePlugin 实例（鸭子类型，测试时用桩替代）。
         # 依赖它的 server/economy/land_system/sky_eye_store/database_manager/
@@ -99,6 +100,12 @@ class MCPServer:
         self.token = str(token or "")
         self.logger = logger
         self.audit_log_path = str(audit_log_path or "")
+        # 对外暴露的工具名前缀（MCP_TOOL_PREFIX 设置）：多服同接一个客户端时防撞名。
+        # tools/list 输出名加前缀，tools/call 先剥前缀再查表（裸名也接受）。
+        self.tool_prefix = str(tool_prefix or "").strip()
+        # 第三方插件注册的工具：plugin_name -> [spec]；spec = {name, description, schema, handler, plugin}
+        self._plugin_tools: Dict[str, List[Dict[str, Any]]] = {}
+        self._plugin_tools_lock = threading.Lock()
 
         self._httpd: Optional[ThreadingHTTPServer] = None
         self._server_thread: Optional[threading.Thread] = None
@@ -246,10 +253,19 @@ class MCPServer:
             if method == "ping":
                 return self._result_response(request_id, {})
             if method == "tools/list":
+                prefix = self.tool_prefix
                 tools = [
-                    {"name": spec["name"], "description": spec["description"], "inputSchema": spec["schema"]}
+                    {"name": f"{prefix}{spec['name']}", "description": spec["description"], "inputSchema": spec["schema"]}
                     for spec in self._tools.values()
                 ]
+                tools.extend(
+                    {
+                        "name": f"{prefix}{spec['name']}",
+                        "description": f"[{spec['plugin']}] {spec['description']}",
+                        "inputSchema": spec["schema"],
+                    }
+                    for spec in self._iter_external_tools()
+                )
                 return self._result_response(request_id, {"tools": tools})
             if method == "tools/call":
                 return self._handle_tools_call(request_id, params)
@@ -275,15 +291,27 @@ class MCPServer:
         )
 
     def _handle_tools_call(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
-        name = params.get("name")
+        raw_name = params.get("name")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
             arguments = {}
-        if name not in self._tools:
-            return self._error_response(request_id, JSON_RPC_INVALID_PARAMS, f"unknown tool: {name}")
-        spec = self._tools[name]
+        spec, is_external = self._resolve_tool(raw_name if isinstance(raw_name, str) else "")
+        if spec is None:
+            return self._error_response(request_id, JSON_RPC_INVALID_PARAMS, f"unknown tool: {raw_name}")
+        if is_external:
+            # 第三方工具全量审计（args 截断，防审计文件膨胀）
+            self._audit(
+                {
+                    "tool": str(raw_name),
+                    "plugin": spec.get("plugin", ""),
+                    "args": json.dumps(arguments, ensure_ascii=False, default=str)[:2000],
+                }
+            )
+            handler = spec["handler"]
+        else:
+            handler = spec["fn"]
         try:
-            result = spec["fn"](arguments)
+            result = handler(arguments)
         except Exception as e:  # noqa: BLE001 - 工具内异常转 isError 响应
             return self._result_response(
                 request_id,
@@ -388,6 +416,101 @@ class MCPServer:
             },
             self._tool_query_sky_eye,
         )
+
+    # ------------------------------------------------------------------
+    # 第三方插件工具注册表
+    # ------------------------------------------------------------------
+
+    def _iter_external_tools(self) -> List[Dict[str, Any]]:
+        """快照全部外部工具（附带 plugin 字段），遍历期间注册表可安全变更。"""
+        with self._plugin_tools_lock:
+            return [
+                dict(spec, plugin=pname)
+                for pname, specs in self._plugin_tools.items()
+                for spec in specs
+            ]
+
+    def _resolve_tool(self, name: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """按暴露名解析工具（先剥 MCP_TOOL_PREFIX，裸名兼容）。返回 (spec, is_external)。"""
+        bare = name
+        if self.tool_prefix and bare.startswith(self.tool_prefix):
+            bare = bare[len(self.tool_prefix):]
+        if not bare:
+            return None, False
+        if bare in self._tools:
+            return self._tools[bare], False
+        for spec in self._iter_external_tools():
+            if spec["name"] == bare:
+                return spec, True
+        return None, False
+
+    def register_plugin_tools(self, plugin_name: str, tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """注册第三方插件的 MCP 工具（幂等：同插件重复注册整体替换）。
+
+        每个 spec：name（裸名，不带 MCP_TOOL_PREFIX）、description、
+        schema（JSON Schema dict）、handler(args: dict) -> Any。
+
+        线程约定：handler 在 MCP HTTP 工作线程被调用，须自行保证线程安全——
+        委托 run_ai_tool 这类内部自带主线程跳转的入口即可；不要在 handler 里
+        直接触碰玩家对象或执行命令（那请包一层 scheduler.run_task）。
+        不在 MCP 层统一包 _run_on_main：handler 若再内部跳主线程会嵌套调度，
+        有"主线程等主线程"死锁风险。
+
+        重名（与内建或其他插件冲突）的工具按条拒绝并 warning，其余照常注册。
+
+        返回 {"registered": [裸名...], "rejected": [[name, reason], ...]}。
+        """
+        pname = str(plugin_name or "").strip()
+        if not pname:
+            raise ValueError("plugin_name required")
+        valid: List[Dict[str, Any]] = []
+        rejected: List[List[str]] = []
+        with self._plugin_tools_lock:
+            # 冲突判定只看内建工具 + 其他插件（本插件旧注册允许被自身替换）
+            taken = set(self._tools.keys())
+            for owner, specs in self._plugin_tools.items():
+                if owner == pname:
+                    continue
+                for spec in specs:
+                    taken.add(spec["name"])
+            for spec in tools or []:
+                spec = spec if isinstance(spec, dict) else {}
+                name = str(spec.get("name") or "").strip()
+                handler = spec.get("handler")
+                if not name or not callable(handler):
+                    rejected.append([name or "?", "missing name or callable handler"])
+                    continue
+                if name in taken:
+                    self._log("warning", f"plugin tool '{pname}:{name}' rejected: name conflict")
+                    rejected.append([name, "name conflict"])
+                    continue
+                taken.add(name)
+                valid.append(
+                    {
+                        "name": name,
+                        "description": str(spec.get("description") or name),
+                        "schema": spec.get("schema") if isinstance(spec.get("schema"), dict) else {"type": "object", "properties": {}},
+                        "handler": handler,
+                    }
+                )
+            if valid:
+                self._plugin_tools[pname] = valid
+            # valid 为空时不动旧注册：一次性校验失败不应把整个插件静默注销
+        self._log(
+            "info",
+            f"plugin '{pname}' registered {len(valid)} MCP tool(s)"
+            + (f", {len(rejected)} rejected" if rejected else ""),
+        )
+        return {"registered": [s["name"] for s in valid], "rejected": rejected}
+
+    def unregister_plugin_tools(self, plugin_name: str) -> bool:
+        """注销某插件的全部工具。返回是否确有注销。"""
+        pname = str(plugin_name or "").strip()
+        with self._plugin_tools_lock:
+            removed = self._plugin_tools.pop(pname, None)
+        if removed:
+            self._log("info", f"plugin '{pname}' unregistered {len(removed)} MCP tool(s)")
+        return bool(removed)
 
     # ------------------------------------------------------------------
     # 工具实现

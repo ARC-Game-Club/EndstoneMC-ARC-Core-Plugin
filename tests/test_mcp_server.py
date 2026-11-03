@@ -450,5 +450,153 @@ class LifecycleTests(unittest.TestCase):
         int(token, 16)  # 十六进制
 
 
+class PluginToolRegistryTests(unittest.TestCase):
+    """第三方插件工具注册表 + MCP_TOOL_PREFIX 路由。"""
+
+    def setUp(self):
+        self.mcp = make_server()
+        self.calls = []
+
+    def _ext_spec(self, name="ext_hello"):
+        def handler(args):
+            self.calls.append((name, args))
+            return {"pong": args.get("who", "?")}
+
+        return {
+            "name": name,
+            "description": "外部测试工具",
+            "schema": {"type": "object", "properties": {"who": {"type": "string"}}},
+            "handler": handler,
+        }
+
+    def test_register_and_call(self):
+        result = self.mcp.register_plugin_tools("stub_plugin", [self._ext_spec()])
+        self.assertEqual(result["registered"], ["ext_hello"])
+        self.assertEqual(result["rejected"], [])
+        # tools/list 合并外部工具
+        listing = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        names = [t["name"] for t in listing["result"]["tools"]]
+        self.assertIn("ext_hello", names)
+        self.assertEqual(len(names), 8)  # 7 内建 + 1 外部
+        ext_entry = next(t for t in listing["result"]["tools"] if t["name"] == "ext_hello")
+        self.assertIn("[stub_plugin]", ext_entry["description"])
+        # 调用
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ext_hello", "arguments": {"who": "Alice"}}}
+        )
+        text = resp["result"]["content"][0]["text"]
+        self.assertIn("Alice", text)
+        self.assertEqual(self.calls, [("ext_hello", {"who": "Alice"})])
+
+    def test_register_validation_and_conflicts(self):
+        result = self.mcp.register_plugin_tools(
+            "stub_plugin",
+            [
+                self._ext_spec("ext_ok"),
+                {"name": "execute_command", "handler": lambda a: a},  # 撞内建
+                {"name": "ext_ok", "handler": lambda a: a},  # 撞同批次
+                {"name": "", "handler": lambda a: a},  # 空名
+                {"name": "ext_no_handler"},  # 缺 handler
+                "not-a-dict",  # 非法条目
+            ],
+        )
+        self.assertEqual(result["registered"], ["ext_ok"])
+        rejected_names = [r[0] for r in result["rejected"]]
+        self.assertIn("execute_command", rejected_names)
+        self.assertIn("ext_no_handler", rejected_names)
+        # 5 条被拒：撞内建 / 撞同批次 / 空名 / 缺 handler / 非法条目（"?"）
+        self.assertEqual(len(result["rejected"]), 5)
+
+    def test_cross_plugin_conflict_but_own_replace(self):
+        self.mcp.register_plugin_tools("plugin_a", [self._ext_spec("shared_name")])
+        # 其他插件撞名被拒
+        result = self.mcp.register_plugin_tools("plugin_b", [self._ext_spec("shared_name")])
+        self.assertEqual(result["registered"], [])
+        # 同插件重注册 = 整体替换（幂等）
+        result = self.mcp.register_plugin_tools("plugin_a", [self._ext_spec("shared_name"), self._ext_spec("extra")])
+        self.assertEqual(sorted(result["registered"]), ["extra", "shared_name"])
+        listing = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        names = [t["name"] for t in listing["result"]["tools"]]
+        self.assertEqual(names.count("shared_name"), 1)
+        self.assertIn("extra", names)
+
+    def test_unregister(self):
+        self.mcp.register_plugin_tools("stub_plugin", [self._ext_spec()])
+        self.assertTrue(self.mcp.unregister_plugin_tools("stub_plugin"))
+        self.assertFalse(self.mcp.unregister_plugin_tools("stub_plugin"))
+        listing = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        self.assertEqual(len(listing["result"]["tools"]), 7)
+
+    def test_unknown_external_tool_error(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ghost"}}
+        )
+        self.assertIn("unknown tool", resp["error"]["message"])
+
+    def test_external_tool_audited(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.mcp.audit_log_path = str(Path(td) / "audit.jsonl")
+            self.mcp.register_plugin_tools("stub_plugin", [self._ext_spec()])
+            self.mcp.handle_jsonrpc(
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ext_hello", "arguments": {"who": "Bob"}}}
+            )
+            lines = [json.loads(x) for x in (Path(td) / "audit.jsonl").read_text("utf-8").splitlines()]
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["plugin"], "stub_plugin")
+        self.assertIn("Bob", lines[0]["args"])
+
+    def test_handler_exception_is_error_result(self):
+        def bad_handler(args):
+            raise RuntimeError("boom")
+
+        self.mcp.register_plugin_tools(
+            "stub_plugin", [{"name": "ext_bad", "description": "", "schema": {}, "handler": bad_handler}]
+        )
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ext_bad"}}
+        )
+        self.assertTrue(resp["result"]["isError"])
+        self.assertIn("boom", resp["result"]["content"][0]["text"])
+
+
+class ToolPrefixTests(unittest.TestCase):
+    """MCP_TOOL_PREFIX：tools/list 加前缀、tools/call 剥前缀（裸名兼容）。"""
+
+    def setUp(self):
+        self.mcp = make_server(tool_prefix="zombie_")
+        self.mcp.register_plugin_tools(
+            "stub_plugin",
+            [{"name": "ext_x", "description": "", "schema": {}, "handler": lambda a: {"ok": True}}],
+        )
+
+    def _list_names(self):
+        listing = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        return [t["name"] for t in listing["result"]["tools"]]
+
+    def test_list_prefixed(self):
+        names = self._list_names()
+        self.assertIn("zombie_execute_command", names)
+        self.assertIn("zombie_ext_x", names)
+        self.assertNotIn("execute_command", names)
+
+    def test_call_prefixed(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "zombie_ext_x"}}
+        )
+        self.assertIn("ok", resp["result"]["content"][0]["text"])
+
+    def test_call_bare_name_still_works(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "ext_x"}}
+        )
+        self.assertIn("ok", resp["result"]["content"][0]["text"])
+
+    def test_call_prefixed_builtin(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "zombie_get_server_status"}}
+        )
+        self.assertIn("minecraft_version", resp["result"]["content"][0]["text"])
+
+
 if __name__ == "__main__":
     unittest.main()

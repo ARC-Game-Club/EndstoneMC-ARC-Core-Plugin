@@ -637,5 +637,113 @@ class TranslatableTextTests(unittest.TestCase):
         self.assertEqual(mcp_server_mod._to_text(object()), str(object()))
 
 
+class LimitedTokenTests(unittest.TestCase):
+    """受限通道：limited token 鉴权、tools/list 隐藏 owner_only、tools/call 拒绝。"""
+
+    def setUp(self):
+        self.mcp = make_server(token="owner-secret", limited_token="limited-secret")
+
+    def test_execute_command_marked_owner_only(self):
+        self.assertTrue(self.mcp._tools["execute_command"]["owner_only"])
+        for name, spec in self.mcp._tools.items():
+            if name != "execute_command":
+                self.assertFalse(spec["owner_only"], name)
+
+    def test_limited_tools_list_hides_execute_command(self):
+        resp = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, role="limited")
+        names = [t["name"] for t in resp["result"]["tools"]]
+        self.assertNotIn("execute_command", names)
+        self.assertIn("get_server_status", names)
+        self.assertEqual(len(names), 6)
+
+    def test_owner_tools_list_full(self):
+        resp = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, role="owner")
+        self.assertEqual(len(resp["result"]["tools"]), 7)
+
+    def test_limited_call_owner_only_rejected(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "execute_command", "arguments": {"command": "list"}}},
+            role="limited",
+        )
+        self.assertTrue(resp["result"]["isError"])
+        self.assertIn("服主通道", resp["result"]["content"][0]["text"])
+        self.assertEqual(self.mcp.plugin.server.dispatched, [])
+
+    def test_limited_call_readonly_ok(self):
+        resp = self.mcp.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "get_server_status"}},
+            role="limited",
+        )
+        self.assertIn("minecraft_version", resp["result"]["content"][0]["text"])
+
+    def test_default_role_is_owner(self):
+        """不传 role（旧调用方）= owner，行为不变。"""
+        resp = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        self.assertEqual(len(resp["result"]["tools"]), 7)
+
+    def test_external_tool_visible_on_limited_by_default(self):
+        self.mcp.register_plugin_tools(
+            "stub_plugin",
+            [{"name": "ext_tool", "description": "", "schema": {}, "handler": lambda a: {"ok": True}}],
+        )
+        resp = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, role="limited")
+        names = [t["name"] for t in resp["result"]["tools"]]
+        self.assertIn("ext_tool", names)
+
+    def test_external_tool_owner_only_hidden(self):
+        self.mcp.register_plugin_tools(
+            "stub_plugin",
+            [{"name": "ext_owner_tool", "description": "", "schema": {}, "handler": lambda a: {}, "owner_only": True}],
+        )
+        resp = self.mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, role="limited")
+        names = [t["name"] for t in resp["result"]["tools"]]
+        self.assertNotIn("ext_owner_tool", names)
+
+
+class DualTokenHttpTests(unittest.TestCase):
+    """HTTP 层双 token：owner/limited/无效 → 三种角色。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mcp = make_server(token="owner-secret", limited_token="limited-secret")
+        assert cls.mcp.start()
+        cls.port = cls.mcp._httpd.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mcp.stop()
+
+    def _post(self, body, auth):
+        url = f"http://127.0.0.1:{self.port}/mcp"
+        headers = {"Content-Type": "application/json"}
+        if auth is not None:
+            headers["Authorization"] = f"Bearer {auth}"
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode("utf-8") or "{}")
+
+    def test_owner_token_full_tools(self):
+        status, body = self._post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, "owner-secret")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["result"]["tools"]), 7)
+
+    def test_limited_token_filtered_tools(self):
+        status, body = self._post({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, "limited-secret")
+        self.assertEqual(status, 200)
+        names = [t["name"] for t in body["result"]["tools"]]
+        self.assertNotIn("execute_command", names)
+
+    def test_invalid_token_401(self):
+        status, _ = self._post({"jsonrpc": "2.0", "id": 1, "method": "ping"}, "nope")
+        self.assertEqual(status, 401)
+
+    def test_missing_token_401(self):
+        status, _ = self._post({"jsonrpc": "2.0", "id": 1, "method": "ping"}, None)
+        self.assertEqual(status, 401)
+
+
 if __name__ == "__main__":
     unittest.main()

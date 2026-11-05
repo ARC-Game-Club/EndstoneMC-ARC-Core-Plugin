@@ -710,6 +710,16 @@ class ARCCorePlugin(Plugin):
             except Exception as e:
                 self.logger.error(f"[ARC Core] Persist MCP token failed: {e}")
 
+        # 受限通道 token：给 AstrBot 等第三方 LLM 网关用（tools/list 隐藏 owner_only
+        # 工具如 execute_command，防借道控制台级命令绕过 AI-Helper 档位校验）
+        limited_token = (self.setting_manager.GetSetting('MCP_TOKEN_LIMITED') or '').strip()
+        if not limited_token:
+            limited_token = generate_mcp_token()
+            try:
+                self.setting_manager.SetSetting('MCP_TOKEN_LIMITED', limited_token)
+            except Exception as e:
+                self.logger.error(f"[ARC Core] Persist MCP limited token failed: {e}")
+
         # 多服同接一个 MCP 客户端时用前缀防工具撞名（如丧尸服设 zombie_）
         tool_prefix = (self.setting_manager.GetSetting('MCP_TOOL_PREFIX') or '').strip()
 
@@ -717,6 +727,7 @@ class ARCCorePlugin(Plugin):
             self,
             bind_port=mcp_port,
             token=token,
+            limited_token=limited_token,
             logger=self.logger,
             audit_log_path=self._mcp_audit_log_path,
             tool_prefix=tool_prefix,

@@ -92,6 +92,7 @@ class MCPServer:
         *,
         bind_port: int = DEFAULT_MCP_PORT,
         token: str = "",
+        limited_token: str = "",
         logger: Any = None,
         audit_log_path: str = "",
         bind_host: str = DEFAULT_BIND_HOST,
@@ -103,7 +104,11 @@ class MCPServer:
         self.plugin = plugin
         self.bind_host = bind_host
         self.bind_port = int(bind_port)
+        # 双 token：owner=服主级（全套工具）；limited=受限（tools/list 隐藏 owner_only
+        # 工具，tools/call 拒绝 owner_only）——给 AstrBot 这类第三方 LLM 网关用，
+        # 防止借道 execute_command（控制台级）绕过 AI-Helper 的档位校验。
         self.token = str(token or "")
+        self.limited_token = str(limited_token or "").strip()
         self.logger = logger
         self.audit_log_path = str(audit_log_path or "")
         # 对外暴露的工具名前缀（MCP_TOOL_PREFIX 设置）：多服同接一个客户端时防撞名。
@@ -239,8 +244,12 @@ class MCPServer:
     # JSON-RPC / MCP 分发（与 HTTP 层解耦，测试可直接调）
     # ------------------------------------------------------------------
 
-    def handle_jsonrpc(self, payload: Any) -> Optional[Dict[str, Any]]:
-        """处理单条 JSON-RPC 请求。通知（无 id）返回 None，否则返回响应对象。"""
+    def handle_jsonrpc(self, payload: Any, *, role: str = "owner") -> Optional[Dict[str, Any]]:
+        """处理单条 JSON-RPC 请求。通知（无 id）返回 None，否则返回响应对象。
+
+        role：鉴权角色，"owner"（服主 token，全套工具）或 "limited"
+        （受限 token，tools/list 隐藏 owner_only 工具、tools/call 拒绝之）。
+        """
         if not isinstance(payload, dict):
             return self._error_response(None, JSON_RPC_INVALID_REQUEST, "request must be a JSON object")
         request_id = payload.get("id")
@@ -260,9 +269,11 @@ class MCPServer:
                 return self._result_response(request_id, {})
             if method == "tools/list":
                 prefix = self.tool_prefix
+                include_owner_only = role != "limited"
                 tools = [
                     {"name": f"{prefix}{spec['name']}", "description": spec["description"], "inputSchema": spec["schema"]}
                     for spec in self._tools.values()
+                    if include_owner_only or not spec.get("owner_only")
                 ]
                 tools.extend(
                     {
@@ -271,10 +282,11 @@ class MCPServer:
                         "inputSchema": spec["schema"],
                     }
                     for spec in self._iter_external_tools()
+                    if include_owner_only or not spec.get("owner_only")
                 )
                 return self._result_response(request_id, {"tools": tools})
             if method == "tools/call":
-                return self._handle_tools_call(request_id, params)
+                return self._handle_tools_call(request_id, params, role=role)
             # notifications/initialized 等一切未知方法：通知静默，请求报错
             if is_notification:
                 return None
@@ -296,7 +308,7 @@ class MCPServer:
             },
         )
 
-    def _handle_tools_call(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    def _handle_tools_call(self, request_id: Any, params: Dict[str, Any], *, role: str = "owner") -> Dict[str, Any]:
         raw_name = params.get("name")
         arguments = params.get("arguments") or {}
         if not isinstance(arguments, dict):
@@ -304,6 +316,14 @@ class MCPServer:
         spec, is_external = self._resolve_tool(raw_name if isinstance(raw_name, str) else "")
         if spec is None:
             return self._error_response(request_id, JSON_RPC_INVALID_PARAMS, f"unknown tool: {raw_name}")
+        if spec.get("owner_only") and role == "limited":
+            return self._result_response(
+                request_id,
+                {
+                    "content": [{"type": "text", "text": "tool error: 该工具仅限服主通道（owner token）使用"}],
+                    "isError": True,
+                },
+            )
         if is_external:
             # 第三方工具全量审计（args 截断，防审计文件膨胀）
             self._audit(
@@ -345,20 +365,35 @@ class MCPServer:
     # ------------------------------------------------------------------
 
     def _register_tools(self) -> None:
-        def register(name: str, description: str, schema: Dict[str, Any], fn: Callable[[Dict[str, Any]], Any]) -> None:
-            self._tools[name] = {"name": name, "description": description, "schema": schema, "fn": fn}
+        def register(
+            name: str,
+            description: str,
+            schema: Dict[str, Any],
+            fn: Callable[[Dict[str, Any]], Any],
+            *,
+            owner_only: bool = False,
+        ) -> None:
+            self._tools[name] = {
+                "name": name,
+                "description": description,
+                "schema": schema,
+                "fn": fn,
+                "owner_only": owner_only,
+            }
 
         register(
             "execute_command",
             "在服务器控制台执行一条原版/插件命令并返回回显。"
             f"硬拦命令（禁止执行）：{', '.join(sorted(BLOCKED_COMMAND_TOKENS))}——重启/重载必须由服主亲自操作。"
-            "玩家名含特殊字符时由调用方自行转义。",
+            "玩家名含特殊字符时由调用方自行转义。"
+            "（仅服主通道：受限 token 不可见、不可调用）",
             {
                 "type": "object",
                 "properties": {"command": {"type": "string", "description": "完整命令行，不含开头斜杠，如 list / give @s diamond 1"}},
                 "required": ["command"],
             },
             self._tool_execute_command,
+            owner_only=True,
         )
         register(
             "get_server_status",
@@ -497,6 +532,7 @@ class MCPServer:
                         "description": str(spec.get("description") or name),
                         "schema": spec.get("schema") if isinstance(spec.get("schema"), dict) else {"type": "object", "properties": {}},
                         "handler": handler,
+                        "owner_only": bool(spec.get("owner_only")),
                     }
                 )
             if valid:
@@ -798,7 +834,8 @@ class _MCPRequestHandler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/mcp":
             self._send_json(404, {"error": "not found, endpoint is /mcp"})
             return
-        if not mcp.token or not self._check_auth():
+        role = self._check_auth()
+        if not mcp.token or role is None:
             self._send_json(401, {"error": "unauthorized"})
             return
         try:
@@ -808,7 +845,7 @@ class _MCPRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             self._send_json(200, mcp._error_response(None, JSON_RPC_PARSE_ERROR, f"parse error: {e}"))
             return
-        response = mcp.handle_jsonrpc(payload)
+        response = mcp.handle_jsonrpc(payload, role=role)
         if response is None:  # 通知：HTTP 202 无 body
             self.send_response(202)
             self.send_header("Content-Length", "0")
@@ -829,16 +866,27 @@ class _MCPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _check_auth(self) -> bool:
+    def _check_auth(self) -> Optional[str]:
+        """返回鉴权角色："owner"（服主 token）/"limited"（受限 token）/None（未授权）。"""
         header = self.headers.get("Authorization") or ""
+        supplied = ""
         if header.startswith("Bearer "):
-            return secrets.compare_digest(header[7:].strip(), self.mcp_server.token)
-        # 兼容用查询参数传 token：/mcp?token=xxx
-        from urllib.parse import parse_qs, urlsplit
+            supplied = header[7:].strip()
+        else:
+            # 兼容用查询参数传 token：/mcp?token=xxx
+            from urllib.parse import parse_qs, urlsplit
 
-        query = parse_qs(urlsplit(self.path).query)
-        supplied = (query.get("token") or [""])[0]
-        return bool(supplied) and secrets.compare_digest(supplied, self.mcp_server.token)
+            query = parse_qs(urlsplit(self.path).query)
+            supplied = (query.get("token") or [""])[0]
+        if not supplied:
+            return None
+        mcp = self.mcp_server
+        if secrets.compare_digest(supplied, mcp.token):
+            return "owner"
+        limited = getattr(mcp, "limited_token", "")
+        if limited and secrets.compare_digest(supplied, limited):
+            return "limited"
+        return None
 
     def _send_json(self, status: int, obj: Dict[str, Any]) -> None:
         body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")

@@ -63,17 +63,23 @@ def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
         return default
 
 
-def _to_text(value: Any) -> str:
-    """CommandSenderWrapper 回调参数可能是 str 或 Translatable，统一转字符串。"""
+def _to_text(value: Any, language: Any = None) -> str:
+    """CommandSenderWrapper 回调参数可能是 str 或 Translatable，统一转字符串。
+
+    Translatable 优先用服务器语言（language.translate）翻成具体文本；
+    不可用时退回 .text + params 原文。"""
     if isinstance(value, str):
         return value
-    for attr in ("translate", "__str__"):
-        try:
-            result = getattr(value, attr)()
-            if isinstance(result, str):
-                return result
-        except Exception:
-            continue
+    text = _safe(lambda: value.text)
+    if text is not None:  # Translatable 形状
+        if language is not None:
+            translated = _safe(lambda: language.translate(value))
+            if isinstance(translated, str) and translated:
+                return translated
+        params = _safe(lambda: list(value.params)) or []
+        if params:
+            return f"{text} {list(params)}"
+        return str(text)
     return str(value)
 
 
@@ -538,13 +544,14 @@ class MCPServer:
             server = self.plugin.server
             lines: List[str] = []
             sender = server.command_sender
+            language = _safe(lambda: server.language)
             try:
                 from endstone.command import CommandSenderWrapper  # 惰性导入，便于离线单测
 
                 wrapper = CommandSenderWrapper(
                     sender,
-                    on_message=lambda m: lines.append(_to_text(m)),
-                    on_error=lambda m: lines.append("[error] " + _to_text(m)),
+                    on_message=lambda m: lines.append(_to_text(m, language)),
+                    on_error=lambda m: lines.append("[error] " + _to_text(m, language)),
                 )
             except Exception:  # noqa: BLE001 - 包装器不可用时退化为无回显执行
                 wrapper = sender

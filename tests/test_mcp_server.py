@@ -598,5 +598,44 @@ class ToolPrefixTests(unittest.TestCase):
         self.assertIn("minecraft_version", resp["result"]["content"][0]["text"])
 
 
+class TranslatableTextTests(unittest.TestCase):
+    """_to_text：str 直通、Translatable 走服务器语言翻译、无 language 时退回原文。"""
+
+    class StubTranslatable:
+        def __init__(self, text, params=None):
+            self.text = text
+            self.params = params or []
+
+    class StubLanguage:
+        def translate(self, value, locale=None):
+            return f"translated:{value.text}"
+
+    def test_str_passthrough(self):
+        self.assertEqual(mcp_server_mod._to_text("hello"), "hello")
+
+    def test_translatable_with_language(self):
+        value = self.StubTranslatable("commands.list.players")
+        self.assertEqual(
+            mcp_server_mod._to_text(value, self.StubLanguage()),
+            "translated:commands.list.players",
+        )
+
+    def test_translatable_without_language(self):
+        value = self.StubTranslatable("commands.x", ["Alice", "Bob"])
+        self.assertEqual(mcp_server_mod._to_text(value), "commands.x ['Alice', 'Bob']")
+        self.assertEqual(mcp_server_mod._to_text(self.StubTranslatable("plain")), "plain")
+
+    def test_translatable_translate_failure_falls_back(self):
+        class BadLanguage:
+            def translate(self, value, locale=None):
+                raise RuntimeError("boom")
+
+        value = self.StubTranslatable("key.x")
+        self.assertEqual(mcp_server_mod._to_text(value, BadLanguage()), "key.x")
+
+    def test_unknown_object_repr(self):
+        self.assertEqual(mcp_server_mod._to_text(object()), str(object()))
+
+
 if __name__ == "__main__":
     unittest.main()

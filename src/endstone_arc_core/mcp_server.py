@@ -28,6 +28,7 @@ import json
 import secrets
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -61,6 +62,26 @@ def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
         return fn()
     except Exception:
         return default
+
+
+def _uptime_seconds(start_time: Any) -> Optional[float]:
+    """服务器已经跑了多少秒。
+
+    ⚠️ EndStone 的 ``server.start_time`` 是 **datetime**，不是时间戳。
+    老写法 ``time.time() - start_time`` 直接抛
+    ``TypeError: unsupported operand type(s) for -: 'float' and 'datetime.datetime'``，
+    于是 ``get_server_status`` 这个工具**一调就报错**（2026-11-09 实测）。
+
+    这里两种都认：datetime 用"现在 - 启动时刻"，数字按时间戳算。
+    """
+    if not start_time:
+        return None
+    try:
+        if isinstance(start_time, datetime):
+            return round((datetime.now() - start_time).total_seconds(), 0)
+        return round(time.time() - float(start_time), 0)
+    except Exception:
+        return None
 
 
 def _to_text(value: Any, language: Any = None) -> str:
@@ -610,7 +631,7 @@ class MCPServer:
             except Exception:
                 pass
             start_time = _safe(lambda: server.start_time, None)
-            uptime = round(time.time() - start_time, 0) if start_time else None
+            uptime = _uptime_seconds(start_time)
             return {
                 "server_name": _safe(lambda: server.name),
                 "endstone_version": _safe(lambda: server.version),

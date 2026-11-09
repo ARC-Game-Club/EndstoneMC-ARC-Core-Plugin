@@ -251,6 +251,44 @@ class JsonRpcTests(unittest.TestCase):
         self.assertEqual(resp["error"]["code"], -32600)
 
 
+class ServerStatusUptimeTests(unittest.TestCase):
+    """``get_server_status`` 算运行时长：EndStone 的 start_time 是 datetime。
+
+    2026-11-09 实测事故：老写法 ``time.time() - start_time`` 直接抛
+    ``TypeError: unsupported operand type(s) for -: 'float' and 'datetime.datetime'``，
+    这个工具**一调就报错**（AstrBot 侧看到的是 tool 返回 error）。
+    """
+
+    def setUp(self):
+        self.mcp = make_server()
+
+    def test_datetime_start_time_is_accepted(self):
+        """start_time 是 datetime → 算出"已经跑了多少秒"。"""
+        from datetime import datetime, timedelta
+
+        self.mcp.plugin.server.start_time = datetime.now() - timedelta(seconds=90)
+        result = call_tool(self.mcp, "get_server_status")
+        self.assertNotIn("error", result, result)
+        self.assertIsInstance(result["uptime_seconds"], (int, float))
+        self.assertAlmostEqual(result["uptime_seconds"], 90, delta=5)
+
+    def test_timestamp_start_time_still_works(self):
+        """start_time 是时间戳（老写法）→ 也要能算，不能回归。"""
+        import time as _time
+
+        self.mcp.plugin.server.start_time = _time.time() - 120
+        result = call_tool(self.mcp, "get_server_status")
+        self.assertNotIn("error", result, result)
+        self.assertAlmostEqual(result["uptime_seconds"], 120, delta=5)
+
+    def test_unknown_start_time_yields_none(self):
+        """拿不到启动时刻 → None（不报错）。"""
+        self.mcp.plugin.server.start_time = 0
+        result = call_tool(self.mcp, "get_server_status")
+        self.assertNotIn("error", result, result)
+        self.assertIsNone(result["uptime_seconds"])
+
+
 class ExecuteCommandTests(unittest.TestCase):
     def setUp(self):
         self.mcp = make_server()

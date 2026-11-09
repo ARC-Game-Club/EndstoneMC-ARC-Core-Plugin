@@ -121,6 +121,7 @@ SETTING_GROUPS: List[Dict[str, object]] = [
         "title": "MCP 远控",
         "items": [
             _s("MCP_SERVER_ENABLED", "启用 MCP 远控服务", "bool", choices=BOOL_CHOICES, restart=True),
+            _s("MCP_SERVER_NAME", "MCP 服务器显示名（多服聚合时帮 AI 选服，留空=server.name）", "string", placeholder="", restart=True),
             _s("MCP_SERVER_PORT", "MCP 端口（仅本机 127.0.0.1）", "int", placeholder="19990", restart=True),
             _s("MCP_TOKEN", "MCP 访问令牌（留空自动生成）", "string", placeholder="", restart=True),
             _s("MCP_TOKEN_LIMITED", "MCP 受限令牌（第三方网关用，隐藏 execute_command；留空自动生成）", "string", placeholder="", restart=True),

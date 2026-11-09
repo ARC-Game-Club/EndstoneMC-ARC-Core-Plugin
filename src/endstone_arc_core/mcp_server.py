@@ -118,6 +118,7 @@ class MCPServer:
         audit_log_path: str = "",
         bind_host: str = DEFAULT_BIND_HOST,
         tool_prefix: str = "",
+        server_label: str = "",
     ) -> None:
         # plugin：ARCCorePlugin 实例（鸭子类型，测试时用桩替代）。
         # 依赖它的 server/economy/land_system/sky_eye_store/database_manager/
@@ -135,6 +136,9 @@ class MCPServer:
         # 对外暴露的工具名前缀（MCP_TOOL_PREFIX 设置）：多服同接一个客户端时防撞名。
         # tools/list 输出名加前缀，tools/call 先剥前缀再查表（裸名也接受）。
         self.tool_prefix = str(tool_prefix or "").strip()
+        # 服务器显示名（MCP_SERVER_NAME 设置，回退 server.name）：内建工具描述
+        # 自报身份用——多服聚合接入一个 LLM 时，靠它把「用户说的服名」对到本服工具。
+        self.server_label = str(server_label or "").strip()
         # 第三方插件注册的工具：plugin_name -> [spec]；spec = {name, description, schema, handler, plugin}
         self._plugin_tools: Dict[str, List[Dict[str, Any]]] = {}
         self._plugin_tools_lock = threading.Lock()
@@ -291,8 +295,14 @@ class MCPServer:
             if method == "tools/list":
                 prefix = self.tool_prefix
                 include_owner_only = role != "limited"
+                # 内建工具描述自报服务器身份（外部注册工具由注册方自行标注）
+                label_suffix = f"（作用于服务器：{self.server_label}）" if self.server_label else ""
                 tools = [
-                    {"name": f"{prefix}{spec['name']}", "description": spec["description"], "inputSchema": spec["schema"]}
+                    {
+                        "name": f"{prefix}{spec['name']}",
+                        "description": spec["description"] + label_suffix,
+                        "inputSchema": spec["schema"],
+                    }
                     for spec in self._tools.values()
                     if include_owner_only or not spec.get("owner_only")
                 ]
@@ -634,6 +644,7 @@ class MCPServer:
             uptime = _uptime_seconds(start_time)
             return {
                 "server_name": _safe(lambda: server.name),
+                "server_label": self.server_label or _safe(lambda: server.name),
                 "endstone_version": _safe(lambda: server.version),
                 "minecraft_version": _safe(lambda: server.minecraft_version),
                 "online_count": _safe(lambda: len(server.online_players), 0),

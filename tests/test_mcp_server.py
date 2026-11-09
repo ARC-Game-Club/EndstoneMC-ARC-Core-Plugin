@@ -783,5 +783,40 @@ class DualTokenHttpTests(unittest.TestCase):
         self.assertEqual(status, 401)
 
 
+class ServerLabelTests(unittest.TestCase):
+    """server_label：内建工具描述自报服务器身份 + get_server_status 返回。"""
+
+    def test_label_appended_to_builtin_descriptions(self):
+        mcp = make_server(server_label="弧光无规则生存服")
+        resp = mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        for tool in resp["result"]["tools"]:
+            self.assertIn("（作用于服务器：弧光无规则生存服）", tool["description"], tool["name"])
+
+    def test_no_label_no_suffix(self):
+        mcp = make_server(server_label="")
+        resp = mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        for tool in resp["result"]["tools"]:
+            self.assertNotIn("作用于服务器", tool["description"], tool["name"])
+
+    def test_external_tools_not_labeled_by_core(self):
+        """外部注册工具的标注由注册方负责，ArcCore 不重复追加。"""
+        mcp = make_server(server_label="测试服")
+        mcp.register_plugin_tools(
+            "stub_plugin",
+            [{"name": "ext_x", "description": "原始描述", "schema": {}, "handler": lambda a: {}}],
+        )
+        resp = mcp.handle_jsonrpc({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        ext = next(t for t in resp["result"]["tools"] if t["name"] == "ext_x")
+        self.assertEqual(ext["description"], "[stub_plugin] 原始描述")
+
+    def test_status_includes_label_with_fallback(self):
+        mcp = make_server(server_label="")
+        status = call_tool(mcp, "get_server_status")
+        self.assertEqual(status["server_label"], "Stub Server")  # 回退 server.name
+        mcp2 = make_server(server_label="自定义名")
+        status2 = call_tool(mcp2, "get_server_status")
+        self.assertEqual(status2["server_label"], "自定义名")
+
+
 if __name__ == "__main__":
     unittest.main()

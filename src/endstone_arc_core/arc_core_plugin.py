@@ -722,6 +722,13 @@ class ARCCorePlugin(Plugin):
 
         # 多服同接一个 MCP 客户端时用前缀防工具撞名（如丧尸服设 zombie_）
         tool_prefix = (self.setting_manager.GetSetting('MCP_TOOL_PREFIX') or '').strip()
+        # 服务器显示名（留空回退 server.name）：工具描述自报身份，帮 LLM 选服
+        server_label = (self.setting_manager.GetSetting('MCP_SERVER_NAME') or '').strip()
+        if not server_label:
+            try:
+                server_label = str(self.server.name or '').strip()
+            except Exception:
+                server_label = ''
 
         self.mcp_server = MCPServer(
             self,
@@ -731,6 +738,7 @@ class ARCCorePlugin(Plugin):
             logger=self.logger,
             audit_log_path=self._mcp_audit_log_path,
             tool_prefix=tool_prefix,
+            server_label=server_label,
         )
         if self.mcp_server.start():
             self.logger.info(f"[ARC Core] MCP server started on port {mcp_port} (endpoint /mcp)")

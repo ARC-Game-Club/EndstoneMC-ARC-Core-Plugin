@@ -17645,6 +17645,22 @@ class ARCCorePlugin(Plugin):
         return f"{base}§r"
 
 
+    def _is_death_broadcast_enabled(self) -> bool:
+        """游戏内死亡播报开关（ENABLE_DEATH_BROADCAST，默认 True）。
+
+        读不到 / 空值时按默认开启，保证老配置不会突然静默掉播报。
+        """
+        try:
+            raw = self.setting_manager.GetSetting("ENABLE_DEATH_BROADCAST")
+        except Exception:
+            return True
+        if raw is None or str(raw).strip() == "":
+            return True
+        value = str(raw).strip().lower()
+        if value in ("false", "0", "no", "off", "否", "关", "关闭"):
+            return False
+        return True
+
     def _send_death_broadcast(self, event: PlayerDeathEvent):
         """发送死亡播报消息"""
         try:
@@ -17691,9 +17707,10 @@ class ARCCorePlugin(Plugin):
                     player_name, dimension, x, y, z
                 )
             
-            # 发送给所有在线玩家
-            for player in self.server.online_players:
-                player.send_message(game_message)
+            # 发送给所有在线玩家（受 ENABLE_DEATH_BROADCAST 控制；默认开启）
+            if self._is_death_broadcast_enabled():
+                for player in self.server.online_players:
+                    player.send_message(game_message)
 
             # 发送到QQ群（受 QQ_DEATH_BROADCAST_MODE 控制）
             if self._should_send_qq_death_broadcast(event):

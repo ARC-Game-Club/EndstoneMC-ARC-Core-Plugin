@@ -246,7 +246,7 @@ EndStone ARC Core 是一个功能完整的 EndStone (Minecraft 基岩版服务�
 - **OP 面板**：点「跨服同步」即发起全面对账并显示运行状态
 - **QQ 群消息**：跨服 QQ 互通由 **AstrBot 弧光 EndStone 消息中枢** + **endstone-arc-qq-sync-astrbot** 负责；ARCCore **不再**经 SyncServer 做 QQ 事件中继。死亡播报调用本机 QQ Sync 的 `api_send_event("death", …)`
 - **群聊死亡播报模式**：`QQ_DEATH_BROADCAST_MODE` = `off` / `pvp`（仅 PvP）/ `all`（默认）；仅影响群聊
-- **游戏内死亡播报开关**：`ENABLE_DEATH_BROADCAST`（默认 `True`）；设为 `False` 关闭全服聊天栏死亡播报
+- **游戏内死亡播报开关**：`ENABLE_DEATH_BROADCAST`（默认 `True`）；设为 `False` 关闭全服聊天栏死亡播报（v0.9.95 起真正生效；此前该键虽写进了 `core_setting.yml`，但代码从没读过，OP 面板里关不掉）
 - **启动迁移**：签到迁入本服表；时长 / 进服次数保留在跨服 `player_basic_info`
 
 ### ⏱️ 游戏时长统计（跨服）
@@ -416,8 +416,8 @@ GUILD_RENAME_COST=0
 CHECKIN_GUILD_CONTRIBUTION_POINTS=10
 
 # 死亡播报
-ENABLE_DEATH_BROADCAST=True          # 游戏内全服死亡播报开关
-QQ_DEATH_BROADCAST_MODE=all          # 群聊死亡播报：off / pvp / all
+ENABLE_DEATH_BROADCAST=True          # 游戏内全服死亡播报开关（False=不往聊天栏刷屏）
+QQ_DEATH_BROADCAST_MODE=all          # 群聊死亡播报：off / pvp / all（与上一项互不影响）
 
 # 跨服数据同步
 # 主服 ENABLE_SYNC_SERVER=True；子服 ENABLE_SYNC_CLIENT=True 连接同步中心

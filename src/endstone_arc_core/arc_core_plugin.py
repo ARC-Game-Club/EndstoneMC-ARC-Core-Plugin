@@ -16,6 +16,7 @@ from endstone.event import event_handler, PlayerJoinEvent, PlayerQuitEvent, Play
 from endstone.plugin import Plugin
 
 from endstone_arc_core.DatabaseManager import DatabaseManager
+from endstone_arc_core import command_target
 from endstone_arc_core.Economy import Economy
 from endstone_arc_core.MailSystem import MailSystem
 from endstone_arc_core.LanguageManager import LanguageManager
@@ -892,6 +893,9 @@ class ARCCorePlugin(Plugin):
         if command.name == "arc":
             player = self._resolve_player_for_command_sender(sender)
             if player is None:
+                # 以前这里是静默 return——`execute as @p run arc tp` 一点输出都没有，
+                # 服主根本看不出是"没人在线"还是"插件没接住"。
+                sender.send_message(self._player_only_message(sender))
                 return True
             # 命令弹出新表单前先关闭当前表单，确保新表单能送达客户端
             self._close_open_form(player)
@@ -939,6 +943,7 @@ class ARCCorePlugin(Plugin):
         if command.name == "land":
             player = self._resolve_player_for_command_sender(sender)
             if player is None:
+                sender.send_message(self._player_only_message(sender))
                 return True
             if not args:
                 player.send_message(self.language_manager.GetText("LAND_COMMAND_USAGE"))
@@ -1038,7 +1043,7 @@ class ARCCorePlugin(Plugin):
         player = self._resolve_player_for_command_sender(sender)
         if player is None:
             if not isinstance(sender, Player):
-                sender.send_message("[ARC Core]This command only works for players.")
+                sender.send_message(self._player_only_message(sender))
             return True
         if not getattr(self, "sidebar_system", None) or not self.sidebar_system.enabled:
             msg = self.language_manager.GetText("SIDEBAR_DISABLED") or "[弧光核心]侧边栏功能未启用。"
@@ -1150,11 +1155,40 @@ class ARCCorePlugin(Plugin):
                 return online_player
         return None
 
+    def _is_console_sender(self, sender: CommandSender) -> bool:
+        """这个 sender 是不是服务器控制台本体。"""
+        return command_target.is_console_sender(sender, self.server)
+
+    def _human_players(self) -> list:
+        """在线的**真人**玩家（xuid 非空；AI 假人没有 Xbox Live 客户端，xuid 是空的）。"""
+        return command_target.human_players(self.server)
+
+    def _sole_human_player(self) -> Optional[Player]:
+        """线上**恰好一个**真人时返回他；0 个或多个都返回 None（多真人时无法猜）。"""
+        return command_target.sole_human_player(self.server)
+
+    def _player_only_message(self, sender: CommandSender) -> str:
+        """解析不到玩家时的提示。多真人时说明原因，别只丢一句"只能由玩家使用"。"""
+        if not command_target.sender_name(sender) and not self._is_console_sender(sender):
+            ambiguous = command_target.ambiguous_target_message(self.server)
+            if ambiguous:
+                return ambiguous
+        return '[ARC Core]该指令只能由玩家使用。'
+
     def _resolve_player_for_command_sender(self, sender: CommandSender) -> Optional[Player]:
-        """真实玩家直接返回；控制台/命令方块等从 sender 名称解析在线玩家（与 connecttoserver 一致）。"""
-        if isinstance(sender, Player):
-            return sender
-        return self._resolve_player_from_sender_name(str(getattr(sender, "name", "") or ""))
+        """真实玩家直接返回；控制台/命令方块等从 sender 名称解析在线玩家（与 connecttoserver 一致）。
+
+        Endstone 0.11.15 起 `execute as @p run arc tp` 转发过来的 sender **拿不到目标
+        身份**：上游 2025-06-22 删掉了 `ProxiedCommandSender`，转发过来的 sender 变成
+        基类 `CommandSender`、名字是空串（实测 `execute as @p run say x` 日志里是
+        `[] x`，控制台直连是 `[Server] x`）。这时线上只有一个人类玩家就代他执行；
+        多个真人无法猜，调用方要给出提示（别再静默 return）。
+
+        解析细节见 `command_target.py`（纯函数，可离线单测）。
+        """
+        return command_target.resolve_player_for_sender(
+            sender, self.server, Player, self._resolve_player_from_sender_name
+        )
 
     def _run_land_pos1_for_player(self, player: Player) -> None:
         if not self._ensure_land_claim_allowed(player):

@@ -79,6 +79,67 @@ def sole_human_player(server):
     return None
 
 
+def _dimension_id(location) -> str:
+    """从 Location 拿维度 id（拿不到就当主世界）。"""
+    dim = getattr(location, "dimension", None)
+    if dim is None:
+        return "overworld"
+    for attr in ("id", "name"):
+        val = getattr(dim, attr, None)
+        if val:
+            return str(val).strip()
+    return str(dim).strip() or "overworld"
+
+
+def nearest_human_to_block(server, sender):
+    """命令方块 → 离方块最近的**真人**玩家。
+
+    踏板 + 命令方块的经典玩法：命令方块里**直接写** `arc tp`，插件按"离方块最近的
+    真人"执行——这就是 BDS `@p` 的意思，但只算真人（AI 假人没有客户端，抢到也
+    看不见界面）。
+
+    坐标拿得到：Endstone 的 `BlockCommandSender` 暴露了 `.block`，`Block` 又有
+    `.location`（x/y/z/dimension）。
+    """
+    block = getattr(sender, "block", None)
+    if block is None:
+        return None
+    loc = getattr(block, "location", None)
+    if loc is None:
+        return None
+    try:
+        block_x = float(loc.x)
+        block_y = float(loc.y)
+        block_z = float(loc.z)
+    except Exception:
+        return None
+    block_dim = _dimension_id(loc)
+    candidates = []
+    for online_player in list(getattr(server, "online_players", []) or []):
+        try:
+            player_loc = getattr(online_player, "location", None)
+            if player_loc is None:
+                continue
+            if _dimension_id(player_loc) != block_dim:
+                continue
+            distance = (
+                (float(player_loc.x) - block_x) ** 2
+                + (float(player_loc.y) - block_y) ** 2
+                + (float(player_loc.z) - block_z) ** 2
+            )
+        except Exception:
+            continue
+        candidates.append((distance, online_player))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    for _distance, online_player in candidates:
+        if str(getattr(online_player, "xuid", "") or "").strip():
+            return online_player
+    # 一个真人都没有：退而求其次给最近的假人
+    return candidates[0][1]
+
+
 def resolve_player_for_sender(sender, server, player_cls, resolve_by_name):
     """三段式解析"命令背后真正的玩家"。
 
@@ -96,6 +157,11 @@ def resolve_player_for_sender(sender, server, player_cls, resolve_by_name):
     callee = getattr(sender, "callee", None)
     if isinstance(callee, player_cls):
         return callee
+    # 命令方块（踏板玩法）：按"离方块最近的真人"执行 = BDS @p 的意思。
+    # 这里**直接返回**：命令方块附近没人就是没人，不许再掉到"唯一真人"兜底
+    # ——否则会把界面开给一个离得老远的无关玩家。
+    if getattr(sender, "block", None) is not None:
+        return nearest_human_to_block(server, sender)
     name = sender_name(sender)
     if name:
         # 命令方块 / 代理 / 控制台：按名字解析，查不到就返回 None（保持旧行为）

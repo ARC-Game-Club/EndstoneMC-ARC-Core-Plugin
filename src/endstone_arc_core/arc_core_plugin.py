@@ -1169,6 +1169,8 @@ class ARCCorePlugin(Plugin):
 
     def _player_only_message(self, sender: CommandSender) -> str:
         """解析不到玩家时的提示。多真人时说明原因，别只丢一句"只能由玩家使用"。"""
+        if getattr(sender, 'block', None) is not None:
+            return '[ARC Core]命令方块附近没有玩家（只有假人也不算——它们没有客户端）。'
         if not command_target.sender_name(sender) and not self._is_console_sender(sender):
             ambiguous = command_target.ambiguous_target_message(self.server)
             if ambiguous:

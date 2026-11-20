@@ -29,9 +29,35 @@ _spec.loader.exec_module(command_target)
 
 
 class StubPlayer:
-    def __init__(self, name, xuid=""):
+    def __init__(self, name, xuid="", location=None):
         self.name = name
         self.xuid = xuid
+        self.location = location or StubLocation(0, 64, 0)
+
+
+class StubDimension:
+    def __init__(self, dimension_id="overworld"):
+        self.id = dimension_id
+
+
+class StubLocation:
+    def __init__(self, x, y, z, dimension="overworld"):
+        self.x, self.y, self.z = x, y, z
+        self.dimension = StubDimension(dimension)
+
+
+class StubBlock:
+    def __init__(self, x, y, z, dimension="overworld"):
+        self.location = StubLocation(x, y, z, dimension)
+
+
+class BlockSender:
+    """命令方块 sender：Endstone 暴露 `.block`，`Block` 暴露 `.location`。"""
+
+    name = ""
+
+    def __init__(self, x=0, y=64, z=0, dimension="overworld"):
+        self.block = StubBlock(x, y, z, dimension)
 
 
 class StubServer:
@@ -131,6 +157,31 @@ class CommandTargetTests(unittest.TestCase):
         self.assertIn("无法确定目标玩家", command_target.ambiguous_target_message(server))
         one = StubServer([StubPlayer("A", "1")])
         self.assertEqual(command_target.ambiguous_target_message(one), "")
+
+    # ---------- 命令方块（踏板玩法）----------
+
+    def test_block_sender_picks_the_nearest_human(self):
+        """命令方块 → 离方块最近的真人（这就是 BDS `@p` 的意思）。"""
+        near = StubPlayer("NEAR", "1", StubLocation(3, 64, 0))
+        far = StubPlayer("FAR", "2", StubLocation(50, 64, 0))
+        server = StubServer([near, far])
+        self.assertIs(resolve(server, BlockSender(0, 64, 0)), near)
+
+    def test_block_sender_ignores_bots(self):
+        """假人离得更近也不该抢——它没有客户端。"""
+        bot = StubPlayer("bot_a", "", StubLocation(1, 64, 0))
+        human = StubPlayer("DEVILENMO", "2535", StubLocation(20, 64, 0))
+        server = StubServer([bot, human])
+        self.assertIs(resolve(server, BlockSender(0, 64, 0)), human)
+
+    def test_block_sender_skips_other_dimensions(self):
+        human = StubPlayer("DEVILENMO", "2535", StubLocation(1, 64, 0, "nether"))
+        server = StubServer([human])
+        self.assertIsNone(resolve(server, BlockSender(0, 64, 0, "overworld")))
+
+    def test_block_sender_without_players_is_none(self):
+        server = StubServer([])
+        self.assertIsNone(resolve(server, BlockSender(0, 64, 0)))
 
 
 if __name__ == "__main__":
